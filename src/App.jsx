@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { format, parse, addMinutes, subMinutes, isWithinInterval, areIntervalsOverlapping, getHours, getMinutes, set, isValid } from 'date-fns';
-import { Upload, Calendar, Clock, User, Users, FileSpreadsheet, XCircle } from 'lucide-react';
+import { format, parse, addMinutes, subMinutes, isWithinInterval, areIntervalsOverlapping, getHours, getMinutes, set, isValid, startOfWeek, addDays, isSameDay } from 'date-fns';
+import { Upload, Calendar, Clock, User, Users, FileSpreadsheet, XCircle, LayoutGrid, List } from 'lucide-react';
+import { calculateDailyAvailability } from './utils/availability';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -74,6 +75,7 @@ const Card = ({ className, ...props }) => (
 
 function App() {
   const [step, setStep] = useState('upload'); // 'upload' | 'dashboard'
+  const [viewMode, setViewMode] = useState('day'); // 'day' | 'week'
   const [staffData, setStaffData] = useState([]); // Array of staff objects
   const [scheduleData, setScheduleData] = useState([]); // Raw schedule entries
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -296,145 +298,49 @@ function App() {
 
   // Logic: Calculate Availability for Selected Date
   const processedAvailability = useMemo(() => {
-    if (!selectedDate || !scheduleData) return [];
-
-    try {
-        // Filter schedule for selected date
-        // Date parsing from Excel can be tricky (some are serial numbers, some strings)
-        const dailyRecords = scheduleData.filter(record => {
-            let recDate = record['服務日期'];
-            if (!recDate) return false;
-            
-            // Handle Excel Date Object
-            if (recDate instanceof Date) {
-                 return format(recDate, 'yyyy-MM-dd') === selectedDate;
-            }
-            // Handle String "2023/10/01" or "2023-10-01"
-            try {
-                // Attempt simple string match first
-                if (typeof recDate === 'string' && (recDate.includes(selectedDate) || recDate === selectedDate)) return true;
-                 // Try parsing
-                 const parsed = new Date(recDate);
-                 if (!isNaN(parsed)) {
-                     return format(parsed, 'yyyy-MM-dd') === selectedDate;
-                 }
-            } catch(e) {}
-            return false;
-        });
-
-        // Map each staff to their timeline
-        return staffData.map(staff => {
-            const staffRecords = dailyRecords.filter(r => r['服務人員'] === staff.name);
-            
-            // Parse Busy Times
-            let busyIntervals = [];
-            staffRecords.forEach(record => {
-                const timeRange = record['服務時間']; // "HH:MM~HH:MM"
-                if (!timeRange || typeof timeRange !== 'string') return;
-                
-                // Robust extraction: Find any two time strings "HH:MM"
-                const matches = timeRange.match(/(\d{1,2}:\d{2})/g);
-                if (!matches || matches.length < 2) return;
-
-                const startStr = matches[0];
-                const endStr = matches[1];
-
-                // Construct Date objects for calculation
-                // Base is selectedDate 00:00
-                const dayStart = new Date(selectedDate);
-                
-                const parseTime = (str) => {
-                    const [h, m] = str.trim().split(':').map(Number);
-                    const d = new Date(dayStart);
-                    d.setHours(h, m, 0, 0);
-                    return d;
-                };
-
-                const startTime = parseTime(startStr);
-                const endTime = parseTime(endStr);
-
-                if (isValid(startTime) && isValid(endTime)) {
-                     busyIntervals.push({ start: startTime, end: endTime });
-                }
-            });
-
-            // Add Buffer
-            // We do this by creating a "Buffered Interval" for each busy interval
-            // Then we merge overlapping buffered intervals to get the "Unavailable Blocks"
-            
-            // 1. Raw Busy + Buffer
-            const rawBlocked = busyIntervals.map(interval => ({
-                start: subMinutes(interval.start, bufferBuffer),
-                end: addMinutes(interval.end, bufferBuffer),
-                type: 'buffered_busy',
-                originalStart: interval.start,
-                originalEnd: interval.end
-            }));
-
-            // 2. Merge overlapping
-            // Sort by start time
-            rawBlocked.sort((a, b) => a.start - b.start);
-
-            const mergedBlocked = [];
-            if (rawBlocked.length > 0) {
-                let current = rawBlocked[0];
-                for (let i = 1; i < rawBlocked.length; i++) {
-                    const next = rawBlocked[i];
-                    if (current.end >= next.start) {
-                        current.end = new Date(Math.max(current.end, next.end));
-                        // Keep track of the 'core' busy times? 
-                        // For simply finding free time, we just need the massive block.
-                        // For visualization, we might want to distinguish.
-                    } else {
-                        mergedBlocked.push(current);
-                        current = next;
-                    }
-                }
-                mergedBlocked.push(current);
-            }
-
-            // Definition of "Day Range": 08:00 to 18:00
-            const dayStartBoundary = new Date(selectedDate);
-            dayStartBoundary.setHours(START_OF_DAY, 0, 0, 0);
-            
-            const dayEndBoundary = new Date(selectedDate);
-            dayEndBoundary.setHours(END_OF_DAY, 0, 0, 0);
-
-            // Find Free Blocks
-            const freeIntervals = [];
-            let cursor = dayStartBoundary;
-
-            mergedBlocked.forEach(block => {
-                // Gap between cursor and block start
-                if (block.start > cursor) {
-                    // Ensure we don't go beyond day end
-                    const actualEnd = new Date(Math.min(block.start, dayEndBoundary));
-                    if (actualEnd > cursor) {
-                        freeIntervals.push({ start: new Date(cursor), end: actualEnd });
-                    }
-                }
-                // Move cursor to block end
-                cursor = new Date(Math.max(cursor, block.end));
-            });
-
-            // Final gap after last block
-            if (cursor < dayEndBoundary) {
-                freeIntervals.push({ start: new Date(cursor), end: dayEndBoundary });
-            }
-
-            return {
-                staff,
-                busyRaw: busyIntervals,
-                blocked: mergedBlocked,
-                free: freeIntervals,
-                isFullyFree: busyIntervals.length === 0
-            };
-        });
-    } catch (e) {
-        console.error("Availability Calc Error:", e);
-        return [];
-    }
+    return calculateDailyAvailability(selectedDate, scheduleData, staffData, bufferBuffer);
   }, [scheduleData, staffData, selectedDate, bufferBuffer]);
+
+    // Logic: Calculate Weekly Availability
+  const processedWeeklyAvailability = useMemo(() => {
+    if (viewMode !== 'week' || !selectedDate || !scheduleData) return [];
+    
+    // Start of week (Monday)
+    const startDate = startOfWeek(new Date(selectedDate), { weekStartsOn: 1 });
+    
+    // Generate 7 days
+    const weekDays = Array.from({ length: 7 }).map((_, i) => {
+        const d = addDays(startDate, i);
+        return format(d, 'yyyy-MM-dd');
+    });
+
+    // We want data pivoting on Staff:
+    // [ { staff, days: { '2023-12-16': { ...avail }, ... } } ]
+    
+    // First, get availability for each day
+    const dailyResults = weekDays.map(dateStr => {
+        return {
+            date: dateStr,
+            data: calculateDailyAvailability(dateStr, scheduleData, staffData, bufferBuffer)
+        };
+    });
+
+    // Re-structure by Staff
+    return staffData.map(staff => {
+        const staffWeekData = {};
+        dailyResults.forEach(day => {
+            const staffDayPayload = day.data.find(d => d.staff.id === staff.id);
+            staffWeekData[day.date] = staffDayPayload || { blocked: [], busyRaw: [], free: []};
+        });
+        
+        return {
+            staff,
+            days: staffWeekData
+        };
+    });
+
+  }, [scheduleData, staffData, selectedDate, bufferBuffer, viewMode]);
+
 
 
   // Helper: Filter results based on selected Time Range
@@ -513,6 +419,31 @@ function App() {
             </div>
             
             <div className="flex items-center gap-4">
+                 <div className="flex items-center bg-slate-100 p-1 rounded-lg border">
+                    <button
+                        onClick={() => setViewMode('day')}
+                        className={cn(
+                            "p-1.5 rounded-md transition-all flex items-center gap-1 text-sm font-medium",
+                             viewMode === 'day' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                        )}
+                    >
+                        <List className="w-4 h-4" />
+                        <span className="hidden sm:inline">單日</span>
+                    </button>
+                    <button
+                         onClick={() => setViewMode('week')}
+                         className={cn(
+                            "p-1.5 rounded-md transition-all flex items-center gap-1 text-sm font-medium",
+                             viewMode === 'week' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                        )}
+                    >
+                        <LayoutGrid className="w-4 h-4" />
+                        <span className="hidden sm:inline">週檢視</span>
+                    </button>
+                 </div>
+
+                 <div className="h-8 w-px bg-slate-300 mx-1"></div>
+
                  {/* Filters */}
                  <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border">
                     <Calendar className="w-4 h-4 text-slate-500 ml-2" />
@@ -523,6 +454,7 @@ function App() {
                         onChange={(e) => setSelectedDate(e.target.value)}
                     />
                  </div>
+
 
                  <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-lg border">
                     <Clock className="w-4 h-4 text-slate-500 ml-2" />
@@ -615,6 +547,14 @@ function App() {
                     </div>
                  )}
              </div>
+         ) : viewMode === 'week' ? (
+             /* Scenario C: Week View */
+             <WeeklyView 
+                weeklyData={processedWeeklyAvailability}
+                selectedDate={selectedDate}
+                startHour={START_OF_DAY}
+                endHour={END_OF_DAY}
+             />
          ) : (
          /* Scenario B: Visualization Timeline */
             <div className="space-y-4">
@@ -732,6 +672,135 @@ const TimelineBar = ({ startTime, endTime, blocked, rawBusy, date }) => {
                     />
                 );
             })}
+        </div>
+    );
+};
+
+// Weekly View Component
+const WeeklyView = ({ weeklyData, selectedDate, startHour, endHour }) => {
+    const weekStart = startOfWeek(new Date(selectedDate), { weekStartsOn: 1 });
+    const weekDays = Array.from({ length: 7 }).map((_, i) => addDays(weekStart, i));
+
+    // Helper: Determine cell color based on FREE hours (Core hours: 07:00 ~ 19:00)
+    const getAvailabilityStatus = (dayData, date) => {
+        if (!dayData || !dayData.free) return { color: 'bg-slate-50', text: '-', sub: '' };
+        
+        // Define Core Ends (19:00)
+        const calcEndHour = 19;
+        
+        const totalFreeMs = dayData.free.reduce((acc, curr) => {
+            const blockStart = curr.start;
+            const blockEnd = curr.end;
+            
+            // Construct Limit Boundary for this specific day
+            const limitEnd = new Date(blockStart);
+            limitEnd.setHours(calcEndHour, 0, 0, 0);
+
+            if (blockStart >= limitEnd) return acc;
+
+            const effectiveEnd = (blockEnd > limitEnd) ? limitEnd : blockEnd;
+            const duration = effectiveEnd - blockStart;
+            return acc + (duration > 0 ? duration : 0);
+        }, 0);
+
+        const freeHours = totalFreeMs / 1000 / 60 / 60;
+
+        // Full Free (No shifts at all) -> Blank
+        if (!dayData.busyRaw || dayData.busyRaw.length === 0) return { color: 'bg-white border-slate-100', text: '', sub: '' };
+        
+        if (freeHours >= 6) return { color: 'bg-emerald-100 text-emerald-800 border-emerald-200', text: '空閒', sub: `${freeHours.toFixed(1)}h` };
+        if (freeHours >= 2) return { color: 'bg-amber-100 text-amber-800 border-amber-200', text: '普通', sub: `${freeHours.toFixed(1)}h` };
+        return { color: 'bg-rose-50 text-rose-800 border-rose-200', text: '繁忙', sub: `${freeHours.toFixed(1)}h` };
+    };
+
+    return (
+        <div className="space-y-4">
+             <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-slate-800">全體人員週行程表 ({format(weekStart, 'MM/dd')} ~ {format(addDays(weekStart, 6), 'MM/dd')})</h2>
+                 <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
+                    <div className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-200 rounded-sm"></span> 空閒 (6h+)</div>
+                    <div className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-200 rounded-sm"></span> 普通 (2-6h)</div>
+                    <div className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-200 rounded-sm"></span> 繁忙 (&lt;2h)</div>
+                </div>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border overflow-hidden overflow-x-auto">
+                 <div className="min-w-[1000px]">
+                    {/* Header: Staff + 7 Days */}
+                    <div className="grid grid-cols-[150px_repeat(7,_1fr)] border-b bg-slate-50 divide-x">
+                        <div className="p-3 text-sm font-semibold text-slate-700 pl-6 flex items-center">人員 / 日期</div>
+                        {weekDays.map(d => (
+                            <div key={d.toISOString()} className={cn("p-2 text-center text-sm font-medium", isSameDay(d, new Date(selectedDate)) ? "bg-blue-50 text-blue-700" : "text-slate-600")}>
+                                {format(d, 'MM/dd')} (週{format(d, 'EEEEE', { locale: undefined })})
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Body */}
+                    <div className="divide-y max-h-[70vh] overflow-y-auto">
+                        {weeklyData.map((item, idx) => (
+                            <div key={idx} className="grid grid-cols-[150px_repeat(7,_1fr)] divide-x hover:bg-slate-50 transition-colors group">
+                                <div className="p-3 pl-6 flex flex-col justify-center bg-white sticky left-0 z-10">
+                                    <span className="font-medium text-sm text-slate-900 truncate">{item.staff.name}</span>
+                                </div>
+                                {weekDays.map(d => {
+                                    const dateStr = format(d, 'yyyy-MM-dd');
+                                    const dayData = item.days[dateStr];
+                                    const status = getAvailabilityStatus(dayData);
+                                    
+                                    // Smart Tooltip Positioning
+                                    // Top rows (idx < 3) -> Tooltip pops DOWN (top-full)
+                                    // Other rows -> Tooltip pops UP (bottom-full)
+                                    const isTopRow = idx < 3;
+                                    const tooltipClass = isTopRow 
+                                        ? "top-full mt-2" 
+                                        : "bottom-full mb-2";
+                                    const arrowClass = isTopRow
+                                        ? "bottom-full border-b-slate-800"
+                                        : "top-full border-t-slate-800";
+                                    
+                                    return (
+                                        <div key={dateStr} className="relative h-16 p-1 group/cell">
+                                             <div className={cn(
+                                                 "w-full h-full rounded flex flex-col items-center justify-center border transition-all cursor-default",
+                                                 status.color
+                                             )}>
+                                                <span className="text-xs font-bold">{status.text}</span>
+                                                <span className="text-[10px] opacity-80">{status.sub}</span>
+                                             </div>
+
+                                             {/* Hover Tooltip - Detailed Timeline */}
+                                             <div className={cn(
+                                                 "absolute opacity-0 group-hover/cell:opacity-100 pointer-events-none z-50 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs rounded p-2 w-48 shadow-xl transition-opacity",
+                                                 tooltipClass
+                                             )}>
+                                                 <div className="font-bold border-b border-slate-600 pb-1 mb-1 text-center">{item.staff.name} - {format(d, 'MM/dd')}</div>
+                                                 {dayData && dayData.blocked.length > 0 ? (
+                                                     <div className="space-y-1">
+                                                         <div className="text-slate-400">忙碌時段:</div>
+                                                         {dayData.blocked.map((b, i) => (
+                                                             <div key={i} className="flex justify-between">
+                                                                 <span>{format(b.start, 'HH:mm')} ~ {format(b.end, 'HH:mm')}</span>
+                                                             </div>
+                                                         ))}
+                                                     </div>
+                                                 ) : (
+                                                     <div className="text-green-400 text-center py-1">全日空閒</div>
+                                                 )}
+                                                 {/* Arrow */}
+                                                 <div className={cn(
+                                                     "absolute left-1/2 -translate-x-1/2 border-4 border-transparent",
+                                                     arrowClass
+                                                 )}></div>
+                                             </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
         </div>
     );
 };
