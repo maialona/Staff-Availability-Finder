@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Coral rounded square background, slightly rotated -->
+  <rect x="6" y="6" width="52" height="52" rx="14" ry="14" fill="#FF6B6B"
+        transform="rotate(-6 32 32)"/>
+  <!-- Search icon (circle + handle) -->
+  <circle cx="28" cy="28" r="10" fill="none" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="35" y1="35" x2="46" y2="46" stroke="white" stroke-width="4.5" stroke-linecap="round"/>
+  <!-- User badge (small white circle bottom-right) -->
+  <circle cx="50" cy="50" r="10" fill="white"/>
+  <circle cx="50" cy="47.5" r="3.5" fill="#FF6B6B"/>
+  <path d="M43 56 Q43 51.5 50 51.5 Q57 51.5 57 56" fill="#FF6B6B"/>
+</svg>

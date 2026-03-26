@@ -1,0 +1,118 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Entrance animations */
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-50px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(50px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeDown {
+  from { opacity: 0; transform: translateY(-16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.anim-slide-left  { animation: slideInLeft  1s cubic-bezier(0.16,1,0.3,1) both; }
+.anim-slide-right { animation: slideInRight 1s cubic-bezier(0.16,1,0.3,1) both; }
+.anim-fade-up     { animation: fadeUp       0.7s cubic-bezier(0.16,1,0.3,1) both; }
+.anim-fade-down   { animation: fadeDown     0.7s cubic-bezier(0.16,1,0.3,1) both; }
+.anim-delay-1 { animation-delay: 0.15s; }
+.anim-delay-2 { animation-delay: 0.3s; }
+.anim-delay-3 { animation-delay: 0.45s; }
+.anim-delay-4 { animation-delay: 0.6s; }
+.anim-delay-5 { animation-delay: 0.75s; }
+.anim-delay-6 { animation-delay: 0.9s; }
+
+@layer base {
+  :root {
+    /* Brand Palette from Screenshot */
+    --brand-coral: 0 100% 71%; /* #FF6B6B equivalent HSL */
+    --brand-slate: 200 25% 19%; /* #24333C */
+    --brand-lavender: 220 30% 96%; /* #EBEFF5 */
+    --brand-orange: 33 90% 65%; /* #F6AD55 */
+    --brand-teal: 174 42% 45%; /* #419D94ish */
+    
+    --background: 220 33% 98%;
+    --foreground: 222.2 84% 4.9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    --primary: var(--brand-coral);
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: var(--brand-lavender);
+    --secondary-foreground: var(--brand-slate);
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: var(--brand-orange);
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: var(--brand-coral);
+
+    --radius: 1rem; /* More modern, softer corners */
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    /* ... (rest of dark mode can be customized similarly if needed) */
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+    font-family: 'Outfit', sans-serif;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    -webkit-font-smoothing: antialiased;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    color: hsl(var(--brand-slate));
+    font-weight: 600;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+  }
+  
+  .card-premium {
+    @apply bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow;
+  }
+}
