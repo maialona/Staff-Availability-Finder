@@ -33,7 +33,8 @@ import {
   Check,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
-import { calculateDailyAvailability } from "./utils/availability";
+import { calculateDailyAvailability, applyServiceFilter } from "./utils/availability";
+import { SERVICE_TYPES, TIME_PERIODS } from "./utils/services";
 import clsx from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -538,12 +539,72 @@ function applyTimeFilter(
   return { available, potential, offDuty };
 }
 
+// Serialize a date value (Date object or string) to a yyyy-MM-dd string
+function serializeDateField(val) {
+  if (val instanceof Date) return format(val, "yyyy-MM-dd");
+  if (typeof val === "string" && val) {
+    try {
+      const d = new Date(val);
+      if (!isNaN(d)) return format(d, "yyyy-MM-dd");
+    } catch {}
+    return val;
+  }
+  return val;
+}
+
+// Only save the 3 fields actually used by the availability engine.
+// Omitting the rest keeps localStorage size small enough to be reliable.
+function serializeOrgsForStorage(orgs) {
+  return JSON.stringify(
+    orgs.map((org) => ({
+      id: org.id,
+      name: org.name,
+      fileName: org.fileName,
+      dateRange: org.dateRange,
+      staffData: org.staffData,
+      scheduleData: org.scheduleData.map((row) => ({
+        服務日期: serializeDateField(row["服務日期"]),
+        服務人員: row["服務人員"],
+        服務時間: row["服務時間"],
+      })),
+    })),
+  );
+}
+
+function serializeCaseScheduleForStorage(data) {
+  return JSON.stringify(
+    data.map((client) => ({
+      clientName: client.clientName,
+      sheetName: client.sheetName,
+      records: (client.records || []).map((row) => ({
+        服務日期: serializeDateField(row["服務日期"]),
+        服務人員: row["服務人員"],
+        服務時間: row["服務時間"],
+      })),
+    })),
+  );
+}
+
 function App() {
   // Multi-org state
-  const [orgs, setOrgs] = useState([]); // [{ id, name, staffData, scheduleData, fileName, dateRange }]
+  const [orgs, setOrgs] = useState(() => {
+    try {
+      const saved = localStorage.getItem("stafffind_orgs");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  }); // [{ id, name, staffData, scheduleData, fileName, dateRange }]
   const [pendingOrgName, setPendingOrgName] = useState("");
   const [showOrgManager, setShowOrgManager] = useState(false);
-  const [selectedOrgIds, setSelectedOrgIds] = useState(new Set());
+  const [selectedOrgIds, setSelectedOrgIds] = useState(() => {
+    try {
+      const saved = localStorage.getItem("stafffind_selected_orgs");
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
 
   // Derived: step
   const step = orgs.length === 0 || showOrgManager ? "upload" : "dashboard";
@@ -612,9 +673,57 @@ function App() {
   const [selectedDate, setSelectedDate] = useState(
     format(new Date(), "yyyy-MM-dd"),
   );
-  const [bufferBuffer, setBufferBuffer] = useState(15);
-  const [filterStartTime, setFilterStartTime] = useState("");
-  const [filterEndTime, setFilterEndTime] = useState("");
+  const [bufferBuffer, setBufferBuffer] = useState(() => {
+    const saved = localStorage.getItem("stafffind_buffer");
+    return saved !== null ? Number(saved) : 15;
+  });
+  const [filterStartTime, setFilterStartTime] = useState(() =>
+    localStorage.getItem("stafffind_filter_start") ?? ""
+  );
+  const [filterEndTime, setFilterEndTime] = useState(() =>
+    localStorage.getItem("stafffind_filter_end") ?? ""
+  );
+  const [filterMode, setFilterMode] = useState(() =>
+    localStorage.getItem("stafffind_filter_mode") ?? "manual"
+  ); // 'manual' | 'service'
+  const [selectedService, setSelectedService] = useState(() =>
+    localStorage.getItem("stafffind_service") ?? ""
+  ); // service code
+  const [selectedDuration, setSelectedDuration] = useState(() => {
+    const saved = localStorage.getItem("stafffind_duration");
+    return saved !== null ? Number(saved) : null;
+  }); // minutes
+  const [servicePeriodStart, setServicePeriodStart] = useState(() =>
+    localStorage.getItem("stafffind_period_start") ?? ""
+  ); // HH:MM
+  const [servicePeriodEnd, setServicePeriodEnd] = useState(() =>
+    localStorage.getItem("stafffind_period_end") ?? ""
+  ); // HH:MM
+
+  const switchFilterMode = (mode) => {
+    setFilterMode(mode);
+    if (mode === "service") {
+      setFilterStartTime("");
+      setFilterEndTime("");
+    } else {
+      setSelectedService("");
+      setSelectedDuration(null);
+      setServicePeriodStart("");
+      setServicePeriodEnd("");
+    }
+  };
+
+  const clearServiceFilter = () => {
+    setSelectedService("");
+    setSelectedDuration(null);
+    setServicePeriodStart("");
+    setServicePeriodEnd("");
+  };
+
+  const selectedServiceDef = SERVICE_TYPES.find(
+    (s) => s.code === selectedService,
+  );
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [caseSettings, setCaseSettings] = useState(() => {
@@ -622,10 +731,80 @@ function App() {
     return saved ? JSON.parse(saved) : {};
   });
 
-  const [caseScheduleData, setCaseScheduleData] = useState([]);
+  const [caseScheduleData, setCaseScheduleData] = useState(() => {
+    try {
+      const saved = localStorage.getItem("stafffind_case_schedule");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [caseScheduleLoading, setCaseScheduleLoading] = useState(false);
   const [caseScheduleError, setCaseScheduleError] = useState(null);
-  const [caseScheduleFileName, setCaseScheduleFileName] = useState("");
+  const [caseScheduleFileName, setCaseScheduleFileName] = useState(
+    () => localStorage.getItem("stafffind_case_schedule_name") ?? "",
+  );
+
+  // Persist orgs (schedule data)
+  React.useEffect(() => {
+    try {
+      localStorage.setItem("stafffind_orgs", serializeOrgsForStorage(orgs));
+    } catch (e) {
+      console.error("localStorage 儲存失敗:", e);
+      setError("班表資料太大，無法自動儲存（重新整理後將消失）。請考慮分批匯入較小的檔案。");
+    }
+  }, [orgs]);
+  React.useEffect(() => {
+    localStorage.setItem(
+      "stafffind_selected_orgs",
+      JSON.stringify([...selectedOrgIds]),
+    );
+  }, [selectedOrgIds]);
+
+  // Persist case schedule
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(
+        "stafffind_case_schedule",
+        serializeCaseScheduleForStorage(caseScheduleData),
+      );
+    } catch (e) {
+      console.warn("無法儲存案主排班至 localStorage（資料可能過大）:", e);
+    }
+  }, [caseScheduleData]);
+  React.useEffect(() => {
+    localStorage.setItem("stafffind_case_schedule_name", caseScheduleFileName);
+  }, [caseScheduleFileName]);
+
+  // Persist filter settings
+  React.useEffect(() => {
+    localStorage.setItem("stafffind_buffer", bufferBuffer);
+  }, [bufferBuffer]);
+  React.useEffect(() => {
+    localStorage.setItem("stafffind_filter_mode", filterMode);
+  }, [filterMode]);
+  React.useEffect(() => {
+    localStorage.setItem("stafffind_filter_start", filterStartTime);
+  }, [filterStartTime]);
+  React.useEffect(() => {
+    localStorage.setItem("stafffind_filter_end", filterEndTime);
+  }, [filterEndTime]);
+  React.useEffect(() => {
+    localStorage.setItem("stafffind_service", selectedService);
+  }, [selectedService]);
+  React.useEffect(() => {
+    if (selectedDuration !== null) {
+      localStorage.setItem("stafffind_duration", selectedDuration);
+    } else {
+      localStorage.removeItem("stafffind_duration");
+    }
+  }, [selectedDuration]);
+  React.useEffect(() => {
+    localStorage.setItem("stafffind_period_start", servicePeriodStart);
+  }, [servicePeriodStart]);
+  React.useEffect(() => {
+    localStorage.setItem("stafffind_period_end", servicePeriodEnd);
+  }, [servicePeriodEnd]);
 
   // Persist case settings
   React.useEffect(() => {
@@ -1276,6 +1455,85 @@ function App() {
     caseSettings,
   ]);
 
+  // Helper: Service filter results for a single day
+  const filteredByService = useMemo(() => {
+    if (
+      filterMode !== "service" ||
+      !selectedService ||
+      !selectedDuration ||
+      !servicePeriodStart ||
+      !servicePeriodEnd
+    )
+      return null;
+    return applyServiceFilter(
+      processedAvailability,
+      selectedDate,
+      servicePeriodStart,
+      servicePeriodEnd,
+      selectedDuration,
+      bufferBuffer,
+    );
+  }, [
+    filterMode,
+    selectedService,
+    selectedDuration,
+    servicePeriodStart,
+    servicePeriodEnd,
+    processedAvailability,
+    selectedDate,
+    bufferBuffer,
+  ]);
+
+  // Helper: Service filter results for every day of the selected week
+  const filteredByServiceWeekly = useMemo(() => {
+    if (
+      viewMode !== "week" ||
+      filterMode !== "service" ||
+      !selectedService ||
+      !selectedDuration ||
+      !servicePeriodStart ||
+      !servicePeriodEnd
+    )
+      return null;
+    const weekStart = startOfWeek(new Date(selectedDate), { weekStartsOn: 0 });
+    return Array.from({ length: 7 }).map((_, i) => {
+      const d = addDays(weekStart, i);
+      const dateStr = format(d, "yyyy-MM-dd");
+      const dayAvail = calculateDailyAvailability(
+        dateStr,
+        activeScheduleData,
+        activeStaffData,
+        bufferBuffer,
+      );
+      return {
+        date: dateStr,
+        ...applyServiceFilter(
+          dayAvail,
+          dateStr,
+          servicePeriodStart,
+          servicePeriodEnd,
+          selectedDuration,
+          bufferBuffer,
+        ),
+      };
+    });
+  }, [
+    viewMode,
+    filterMode,
+    selectedService,
+    selectedDuration,
+    servicePeriodStart,
+    servicePeriodEnd,
+    selectedDate,
+    activeScheduleData,
+    activeStaffData,
+    bufferBuffer,
+  ]);
+
+  // Unified active filter result
+  const activeFilterResult = filteredStaffList || filteredByService;
+  const activeWeeklyFilterResult = filteredWeeklyList || filteredByServiceWeekly;
+
   // Stats: service hours per staff (with 例/休 day breakdown)
   const statsData = useMemo(() => {
     if (!activeScheduleData.length || !activeStaffData.length) return [];
@@ -1847,135 +2105,288 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 max-w-7xl mx-auto w-full p-4 sm:px-6 lg:px-8 py-8">
         {/* Dashboard Controls */}
-        <div className="mb-8 p-6 bg-white rounded-3xl border border-slate-100 shadow-sm flex flex-col md:flex-row md:items-end gap-6 anim-fade-up anim-delay-1">
-          <div className="space-y-2 flex-1">
-            <Label className="text-brand-slate font-bold flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-brand-coral" />
-              選擇日期
-            </Label>
-            <DatePicker value={selectedDate} onChange={setSelectedDate} />
-          </div>
+        <div className="mb-8 bg-white rounded-3xl border border-slate-100 shadow-sm anim-fade-up anim-delay-1 overflow-hidden">
+          {/* Row 1: always-visible controls */}
+          <div className="p-6 flex flex-col md:flex-row md:items-end gap-6">
+            <div className="space-y-2 flex-1">
+              <Label className="text-brand-slate font-bold flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-brand-coral" />
+                選擇日期
+              </Label>
+              <DatePicker value={selectedDate} onChange={setSelectedDate} />
+            </div>
 
-          <div className="space-y-2 flex-1">
-            <Label className="text-brand-slate font-bold flex items-center gap-2">
-              <Clock className="w-4 h-4 text-brand-teal" />
-              服務緩衝時間 (分鐘)
-            </Label>
-            <Input
-              type="number"
-              value={bufferBuffer}
-              onChange={(e) => setBufferBuffer(parseInt(e.target.value) || 0)}
-              className="rounded-xl border-slate-200 focus:border-brand-coral focus:ring-brand-coral/20 bg-slate-50/50"
-            />
-          </div>
+            <div className="space-y-2 flex-1">
+              <Label className="text-brand-slate font-bold flex items-center gap-2">
+                <Clock className="w-4 h-4 text-brand-teal" />
+                服務緩衝時間 (分鐘)
+              </Label>
+              <Input
+                type="number"
+                value={bufferBuffer}
+                onChange={(e) => setBufferBuffer(parseInt(e.target.value) || 0)}
+                className="rounded-xl border-slate-200 focus:border-brand-coral focus:ring-brand-coral/20 bg-slate-50/50"
+              />
+            </div>
 
-          <div className="space-y-2 flex-1 border-l border-slate-100 pl-6">
-            <Label className="text-brand-orange font-bold flex items-center gap-2">
-              <Users className="w-4 h-4" />
-              時段篩選 (開始)
-            </Label>
-            <TimePicker
-              value={filterStartTime}
-              onChange={setFilterStartTime}
-              placeholder="開始時間"
-            />
-          </div>
+            <div className="hidden md:block h-10 w-px bg-slate-100 self-end mb-1" />
 
-          <div className="space-y-2 flex-1">
-            <Label className="text-brand-orange font-bold flex items-center gap-2">
-              <Users className="w-4 h-4" />
-              時段篩選 (結束)
-            </Label>
-            <TimePicker
-              value={filterEndTime}
-              onChange={setFilterEndTime}
-              placeholder="結束時間"
-            />
-          </div>
-
-          <div className="hidden md:block h-10 w-px bg-slate-100 self-end mb-1"></div>
-
-          <div className="flex-none bg-brand-lavender/50 p-4 rounded-2xl border border-brand-lavender space-y-3">
-            <div>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">
-                當前查看範圍
-              </p>
-              <p className="text-sm font-bold text-brand-slate">
-                {format(new Date(selectedDate), "yyyy年 MM月 dd日")}
-              </p>
-              {(filterStartTime || filterEndTime) && (
+            {/* Filter Mode Toggle */}
+            <div className="space-y-2">
+              <Label className="text-brand-slate font-bold flex items-center gap-2">
+                <Search className="w-4 h-4 text-brand-orange" />
+                篩選模式
+              </Label>
+              <div className="flex rounded-xl overflow-hidden border border-slate-200">
                 <button
-                  onClick={() => {
-                    setFilterStartTime("");
-                    setFilterEndTime("");
-                  }}
-                  className="mt-2 w-full text-[10px] bg-white text-brand-coral border border-brand-coral/20 py-1 rounded-lg font-bold hover:bg-brand-coral hover:text-white transition-all shadow-sm"
+                  onClick={() => switchFilterMode("manual")}
+                  className={cn(
+                    "px-4 py-2 text-xs font-bold transition-all",
+                    filterMode === "manual"
+                      ? "bg-brand-orange text-white"
+                      : "bg-white text-slate-500 hover:bg-slate-50",
+                  )}
                 >
-                  清除時段篩選
+                  時段篩選
                 </button>
+                <button
+                  onClick={() => switchFilterMode("service")}
+                  className={cn(
+                    "px-4 py-2 text-xs font-bold transition-all",
+                    filterMode === "service"
+                      ? "bg-brand-orange text-white"
+                      : "bg-white text-slate-500 hover:bg-slate-50",
+                  )}
+                >
+                  服務查找
+                </button>
+              </div>
+            </div>
+
+            <div className="hidden md:block h-10 w-px bg-slate-100 self-end mb-1" />
+
+            {/* Summary panel */}
+            <div className="flex-none bg-brand-lavender/50 p-4 rounded-2xl border border-brand-lavender space-y-3">
+              <div>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">
+                  當前查看範圍
+                </p>
+                <p className="text-sm font-bold text-brand-slate">
+                  {format(new Date(selectedDate), "yyyy年 MM月 dd日")}
+                </p>
+                {filterMode === "manual" &&
+                  (filterStartTime || filterEndTime) && (
+                    <button
+                      onClick={() => {
+                        setFilterStartTime("");
+                        setFilterEndTime("");
+                      }}
+                      className="mt-2 w-full text-[10px] bg-white text-brand-coral border border-brand-coral/20 py-1 rounded-lg font-bold hover:bg-brand-coral hover:text-white transition-all shadow-sm"
+                    >
+                      清除時段篩選
+                    </button>
+                  )}
+                {filterMode === "service" &&
+                  (selectedService || selectedDuration || servicePeriodStart) && (
+                    <>
+                      {selectedServiceDef && (
+                        <p className="text-xs text-brand-orange mt-1">
+                          {selectedServiceDef.code} {selectedServiceDef.label}
+                          {selectedDuration ? ` · ${selectedDuration}分鐘` : ""}
+                          {servicePeriodStart && servicePeriodEnd
+                            ? ` · ${servicePeriodStart}~${servicePeriodEnd}`
+                            : ""}
+                        </p>
+                      )}
+                      <button
+                        onClick={clearServiceFilter}
+                        className="mt-2 w-full text-[10px] bg-white text-brand-coral border border-brand-coral/20 py-1 rounded-lg font-bold hover:bg-brand-coral hover:text-white transition-all shadow-sm"
+                      >
+                        清除服務查找
+                      </button>
+                    </>
+                  )}
+              </div>
+              {orgs.length > 1 && (
+                <div className="space-y-1">
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                    機構篩選
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {orgs.map((org, idx) => {
+                      const isActive =
+                        selectedOrgIds.size === 0 || selectedOrgIds.has(org.id);
+                      const color = ORG_COLORS[idx % ORG_COLORS.length];
+                      return (
+                        <button
+                          key={org.id}
+                          onClick={() => toggleOrg(org.id)}
+                          className={cn(
+                            "px-2.5 py-1 rounded-full text-xs font-bold transition-all border",
+                            isActive
+                              ? `${color.bg} ${color.text} border-transparent`
+                              : "bg-white text-slate-400 border-slate-200",
+                          )}
+                        >
+                          {org.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
-            {orgs.length > 1 && (
-              <div className="space-y-1">
-                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                  機構篩選
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {orgs.map((org, idx) => {
-                    const isActive =
-                      selectedOrgIds.size === 0 || selectedOrgIds.has(org.id);
-                    const color = ORG_COLORS[idx % ORG_COLORS.length];
-                    return (
+          </div>
+
+          {/* Row 2: filter controls (conditional) */}
+          {filterMode === "manual" && (
+            <div className="px-6 pb-6 pt-5 border-t border-slate-100 flex flex-col md:flex-row md:items-end gap-6">
+              <div className="space-y-2 flex-1">
+                <Label className="text-brand-orange font-bold flex items-center gap-2">
+                  <Users className="w-4 h-4" />
+                  時段篩選 (開始)
+                </Label>
+                <TimePicker
+                  value={filterStartTime}
+                  onChange={setFilterStartTime}
+                  placeholder="開始時間"
+                />
+              </div>
+              <div className="space-y-2 flex-1">
+                <Label className="text-brand-orange font-bold flex items-center gap-2">
+                  <Users className="w-4 h-4" />
+                  時段篩選 (結束)
+                </Label>
+                <TimePicker
+                  value={filterEndTime}
+                  onChange={setFilterEndTime}
+                  placeholder="結束時間"
+                />
+              </div>
+            </div>
+          )}
+
+          {filterMode === "service" && (
+            <div className="px-6 pb-6 pt-5 border-t border-slate-100 flex flex-col md:flex-row md:items-end gap-6 bg-slate-50/40">
+              <div className="space-y-2 flex-1 min-w-[180px]">
+                <Label className="text-brand-orange font-bold flex items-center gap-2">
+                  <List className="w-4 h-4" />
+                  服務項目
+                </Label>
+                <select
+                  value={selectedService}
+                  onChange={(e) => {
+                    setSelectedService(e.target.value);
+                    setSelectedDuration(null);
+                  }}
+                  className="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white text-sm focus:border-brand-coral focus:ring-brand-coral/20 focus:outline-none"
+                >
+                  <option value="">選擇服務...</option>
+                  {SERVICE_TYPES.map((s) => (
+                    <option key={s.code} value={s.code}>
+                      {s.code} {s.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedServiceDef && (
+                <div className="space-y-2">
+                  <Label className="text-brand-orange font-bold flex items-center gap-2">
+                    <Clock className="w-4 h-4" />
+                    服務時長
+                  </Label>
+                  <div className="flex gap-2">
+                    {selectedServiceDef.durations.map((d) => (
                       <button
-                        key={org.id}
-                        onClick={() => toggleOrg(org.id)}
+                        key={d}
+                        onClick={() => setSelectedDuration(d)}
                         className={cn(
-                          "px-2.5 py-1 rounded-full text-xs font-bold transition-all border",
-                          isActive
-                            ? `${color.bg} ${color.text} border-transparent`
-                            : "bg-white text-slate-400 border-slate-200",
+                          "px-4 py-2 rounded-xl text-sm font-bold transition-all border",
+                          selectedDuration === d
+                            ? "bg-brand-orange text-white border-brand-orange"
+                            : "bg-white text-slate-500 border-slate-200 hover:border-brand-orange/50",
                         )}
                       >
-                        {org.name}
+                        {d}分
                       </button>
-                    );
-                  })}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+
+              {selectedDuration && (
+                <>
+                  <div className="space-y-2 flex-1">
+                    <Label className="text-brand-orange font-bold flex items-center gap-2">
+                      <Clock className="w-4 h-4" />
+                      時段 (開始)
+                    </Label>
+                    <TimePicker
+                      value={servicePeriodStart}
+                      onChange={setServicePeriodStart}
+                      placeholder="開始時間"
+                    />
+                  </div>
+                  <div className="space-y-2 flex-1">
+                    <Label className="text-brand-orange font-bold flex items-center gap-2">
+                      <Clock className="w-4 h-4" />
+                      時段 (結束)
+                    </Label>
+                    <TimePicker
+                      value={servicePeriodEnd}
+                      onChange={setServicePeriodEnd}
+                      placeholder="結束時間"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Scenario A: Filter Applied */}
-        {filteredStaffList && viewMode !== "week" ? (
+        {activeFilterResult && viewMode !== "week" ? (
           <div className="space-y-8 anim-fade-up anim-delay-2">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
                 <Search className="w-5 h-5 text-brand-coral" />
-                時段篩選結果{" "}
-                <span className="bg-brand-lavender text-brand-slate px-2 py-0.5 rounded text-sm">
-                  {filterStartTime}~{filterEndTime}
-                </span>
+                {filterMode === "service" ? (
+                  <>
+                    服務查找結果{" "}
+                    <span className="bg-brand-lavender text-brand-slate px-2 py-0.5 rounded text-sm">
+                      {selectedServiceDef?.code} {selectedServiceDef?.label}{" "}
+                      {selectedDuration}分鐘 · {servicePeriodStart}~{servicePeriodEnd}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    時段篩選結果{" "}
+                    <span className="bg-brand-lavender text-brand-slate px-2 py-0.5 rounded text-sm">
+                      {filterStartTime}~{filterEndTime}
+                    </span>
+                  </>
+                )}
               </h2>
             </div>
 
-            {filteredStaffList.available.length === 0 &&
-            filteredStaffList.potential.length === 0 &&
-            filteredStaffList.offDuty.length === 0 ? (
+            {activeFilterResult.available.length === 0 &&
+            activeFilterResult.potential.length === 0 &&
+            activeFilterResult.offDuty.length === 0 ? (
               <div className="bg-white rounded-xl shadow-sm border p-12 text-center text-slate-500">
                 沒有人員在此時段有空檔或可彈性調整的案件。
               </div>
             ) : (
               <div className="space-y-6">
                 {/* 1. Fully Available */}
-                {filteredStaffList.available.length > 0 && (
+                {activeFilterResult.available.length > 0 && (
                   <div className="space-y-3">
                     <div className="flex items-center gap-2 text-emerald-600 font-bold text-sm">
                       <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                      完全空閒 ({filteredStaffList.available.length})
+                      完全空閒 ({activeFilterResult.available.length})
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {filteredStaffList.available.map((item, idx) => (
+                      {activeFilterResult.available.map((item, idx) => (
                         <Card
                           key={idx}
                           className="p-4 flex flex-col gap-3 hover:shadow-md transition-shadow border-l-4 border-l-emerald-500"
@@ -2010,17 +2421,17 @@ function App() {
                 )}
 
                 {/* 2. Potential Matches (Flexible) */}
-                {filteredStaffList.potential.length > 0 && (
+                {activeFilterResult.potential.length > 0 && (
                   <div className="space-y-3 pt-4 border-t border-slate-100">
                     <div className="flex items-center gap-2 text-brand-orange font-bold text-sm">
                       <Clock className="w-4 h-4" />
-                      可彈性調整人力 ({filteredStaffList.potential.length})
+                      可彈性調整人力 ({activeFilterResult.potential.length})
                       <span className="font-normal text-slate-400 text-xs">
                         (案主標記為可提早或延後)
                       </span>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {filteredStaffList.potential.map((item, idx) => (
+                      {activeFilterResult.potential.map((item, idx) => (
                         <Card
                           key={idx}
                           className="p-4 flex flex-col gap-3 hover:shadow-md transition-shadow border-l-4 border-l-brand-orange relative overflow-hidden"
@@ -2066,14 +2477,14 @@ function App() {
                   </div>
                 )}
                 {/* 3. Off-duty Staff */}
-                {filteredStaffList.offDuty.length > 0 && (
+                {activeFilterResult.offDuty.length > 0 && (
                   <div className="space-y-3 pt-4 border-t border-slate-100">
                     <div className="flex items-center gap-2 text-slate-400 font-bold text-sm">
                       <div className="w-2 h-2 rounded-full bg-slate-300"></div>
-                      休假 / 例假人員 ({filteredStaffList.offDuty.length})
+                      休假 / 例假人員 ({activeFilterResult.offDuty.length})
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {filteredStaffList.offDuty.map((item, idx) => (
+                      {activeFilterResult.offDuty.map((item, idx) => (
                         <Card
                           key={idx}
                           className={cn(
@@ -2123,12 +2534,17 @@ function App() {
           />
         ) : viewMode === "week" ? (
           /* Scenario C: Week View (with or without filter) */
-          filteredWeeklyList ? (
+          activeWeeklyFilterResult ? (
             <WeeklyFilterView
-              weeklyFilterData={filteredWeeklyList}
+              weeklyFilterData={activeWeeklyFilterResult}
               selectedDate={selectedDate}
               filterStartTime={filterStartTime}
               filterEndTime={filterEndTime}
+              filterMode={filterMode}
+              selectedServiceDef={selectedServiceDef}
+              selectedDuration={selectedDuration}
+              servicePeriodStart={servicePeriodStart}
+              servicePeriodEnd={servicePeriodEnd}
             />
           ) : (
             <WeeklyView
@@ -2331,6 +2747,11 @@ const WeeklyFilterView = ({
   selectedDate,
   filterStartTime,
   filterEndTime,
+  filterMode,
+  selectedServiceDef,
+  selectedDuration,
+  servicePeriodStart,
+  servicePeriodEnd,
 }) => {
   const weekStart = startOfWeek(new Date(selectedDate), { weekStartsOn: 0 });
 
@@ -2345,7 +2766,9 @@ const WeeklyFilterView = ({
             {format(addDays(weekStart, 6), "MM/dd")}
             <span className="mx-2 text-slate-200">|</span>
             <span className="font-semibold text-brand-slate">
-              {filterStartTime} ~ {filterEndTime}
+              {filterMode === "service" && selectedServiceDef
+                ? `${selectedServiceDef.code} ${selectedServiceDef.label} ${selectedDuration}分鐘 · ${servicePeriodStart}~${servicePeriodEnd}`
+                : `${filterStartTime} ~ ${filterEndTime}`}
             </span>
           </p>
         </div>

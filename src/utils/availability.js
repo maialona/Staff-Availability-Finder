@@ -1,6 +1,50 @@
 
 import { format, isValid, subMinutes, addMinutes, areIntervalsOverlapping } from 'date-fns';
 
+/**
+ * Find staff with enough contiguous free time within a period (AM/PM).
+ * Returns same shape as applyTimeFilter: { available, potential, offDuty }
+ */
+export const applyServiceFilter = (dayAvailability, dateStr, periodStartStr, periodEndStr, requiredMinutes, bufferBuffer) => {
+    const available = [];
+    const potential = [];
+    const offDuty = [];
+
+    // Build period window as Date objects
+    const periodStart = new Date(dateStr);
+    const [psh, psm] = periodStartStr.split(':').map(Number);
+    periodStart.setHours(psh, psm, 0, 0);
+
+    const periodEnd = new Date(dateStr);
+    const [peh, pem] = periodEndStr.split(':').map(Number);
+    periodEnd.setHours(peh, pem, 0, 0);
+
+    const requiredMs = requiredMinutes * 60000;
+    // Account for buffer: the free slot needs to fit the service + buffer on both sides
+    const requiredWithBufferMs = (requiredMinutes + bufferBuffer * 2) * 60000;
+
+    dayAvailability.forEach((p) => {
+        if (p.isOff) {
+            offDuty.push(p);
+            return;
+        }
+
+        // Check if any free interval, clipped to the period, is wide enough
+        const hasFreeSlot = p.free.some((f) => {
+            const clippedStart = new Date(Math.max(f.start.getTime(), periodStart.getTime()));
+            const clippedEnd = new Date(Math.min(f.end.getTime(), periodEnd.getTime()));
+            const duration = clippedEnd.getTime() - clippedStart.getTime();
+            return duration >= requiredMs;
+        });
+
+        if (hasFreeSlot) {
+            available.push(p);
+        }
+    });
+
+    return { available, potential, offDuty };
+};
+
 // Constants
 const START_OF_DAY = 6; // 06:00
 const END_OF_DAY = 22; // 22:00
