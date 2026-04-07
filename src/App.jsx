@@ -299,13 +299,19 @@ const TimePicker = ({ value, onChange, placeholder = "選擇時間" }) => {
   const minutes = ["00", "10", "20", "30", "40", "50"];
   const [selH, selM] = value ? value.split(":") : [null, null];
   const hourRef = useRef(null);
+  const minuteRef = useRef(null);
 
   useEffect(() => {
     if (open && hourRef.current && selH) {
       const el = hourRef.current.querySelector(`[data-hour="${selH}"]`);
       if (el) el.scrollIntoView({ block: "center" });
     }
-  }, [open, selH]);
+
+    if (open && minuteRef.current && selM) {
+      const el = minuteRef.current.querySelector(`[data-minute="${selM}"]`);
+      if (el) el.scrollIntoView({ block: "center" });
+    }
+  }, [open, selH, selM]);
 
   const handleSelect = (h, m) => {
     onChange(`${h}:${m}`);
@@ -336,7 +342,7 @@ const TimePicker = ({ value, onChange, placeholder = "選擇時間" }) => {
             {/* Hours */}
             <div
               ref={hourRef}
-              className="h-52 w-16 overflow-y-auto scrollbar-none flex flex-col gap-0.5 pr-1"
+              className="h-52 w-16 overflow-y-auto overscroll-contain scrollbar-none flex flex-col gap-0.5 pr-1"
             >
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center mb-1 sticky top-0 bg-white">
                 時
@@ -359,13 +365,17 @@ const TimePicker = ({ value, onChange, placeholder = "選擇時間" }) => {
             </div>
             <div className="w-px bg-slate-100 self-stretch" />
             {/* Minutes */}
-            <div className="flex flex-col gap-0.5 w-16">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center mb-1">
+            <div
+              ref={minuteRef}
+              className="h-52 w-16 overflow-y-auto overscroll-contain scrollbar-none flex flex-col gap-0.5 pr-1"
+            >
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center mb-1 sticky top-0 bg-white">
                 分
               </p>
               {minutes.map((m) => (
                 <button
                   key={m}
+                  data-minute={m}
                   onClick={() => handleSelect(selH || "08", m)}
                   className={cn(
                     "h-8 w-full rounded-lg text-sm font-medium transition-colors",
