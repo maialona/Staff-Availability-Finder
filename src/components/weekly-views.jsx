@@ -387,11 +387,108 @@ export const WeeklyAggregateFilterView = ({
 
 export const WeeklyMultiRuleFilterView = ({
   matches,
+  offDutyMatches = [],
   rules,
   selectedDate,
   cn,
 }) => {
   const weekStart = startOfWeek(new Date(selectedDate), { weekStartsOn: 0 });
+  const totalResultCount = matches.length + offDutyMatches.length;
+
+  const getStatusStyle = (status) => {
+    if (status === "available") {
+      return {
+        card: "bg-emerald-50 border-emerald-200",
+        text: "text-emerald-600",
+        subtext: "text-emerald-500",
+        label: "可排",
+      };
+    }
+
+    if (status === "potential") {
+      return {
+        card: "bg-amber-50 border-amber-200",
+        text: "text-amber-600",
+        subtext: "text-amber-500",
+        label: "可調整",
+      };
+    }
+
+    if (status === "off") {
+      return {
+        card: "bg-slate-100 border-slate-200",
+        text: "text-slate-500",
+        subtext: "text-slate-400",
+        label: "休假 / 例假",
+      };
+    }
+
+    return {
+      card: "bg-white border-slate-200",
+      text: "text-slate-400",
+      subtext: "text-slate-300",
+        label: "未符合",
+    };
+  };
+
+  const renderRuleCard = (match, badgeLabel, badgeClassName, subtitle) => (
+    <div
+      key={match.staff.staffKey || match.staff.id || match.staff.name}
+      className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="text-base font-bold text-brand-slate">{match.staff.name}</h3>
+          <p className="text-xs text-slate-400 mt-1">{subtitle}</p>
+        </div>
+        <span className={cn("px-3 py-1 rounded-full text-xs font-bold shrink-0", badgeClassName)}>
+          {badgeLabel}
+        </span>
+      </div>
+
+      <div className="space-y-3">
+        {match.ruleSummaries.map((rule) => (
+          <div
+            key={rule.id}
+            className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4 space-y-3"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-brand-orange">規則 {rule.order}</div>
+                <div className="text-sm font-semibold text-brand-slate mt-1">
+                  {rule.startTime}~{rule.endTime} / {rule.duration} 分鐘
+                </div>
+              </div>
+              <span className="text-[11px] text-slate-400">
+                {rule.includePotential ? "包含可調整" : "只看直接可排"}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-7 gap-2">
+              {rule.dayStatuses.map((day) => {
+                const style = getStatusStyle(day.status);
+
+                return (
+                  <div
+                    key={`${rule.id}-${day.date}`}
+                    className={cn("rounded-xl border px-2 py-3 text-center", style.card)}
+                  >
+                    <div className={cn("text-[10px] font-bold", style.text)}>
+                      {DAY_NAMES[day.weekday]}
+                    </div>
+                    <div className="text-sm font-bold mt-1 text-brand-slate">
+                      {format(new Date(day.date), "d")}
+                    </div>
+                    <div className={cn("text-[10px] mt-1", style.subtext)}>{style.label}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-6 anim-fade-up anim-delay-2">
@@ -401,13 +498,11 @@ export const WeeklyMultiRuleFilterView = ({
           <p className="text-sm text-slate-400 mt-0.5">
             {format(weekStart, "yyyy/MM/dd")} ~ {format(addDays(weekStart, 6), "MM/dd")}
             <span className="mx-2 text-slate-200">|</span>
-            <span className="font-semibold text-brand-slate">
-              需同時符合 {rules.length} 組規則
-            </span>
+            <span className="font-semibold text-brand-slate">共設定 {rules.length} 組規則</span>
           </p>
         </div>
         <div className="text-sm text-slate-500 bg-white border border-slate-200 rounded-2xl px-4 py-3">
-          共找到 <span className="font-bold text-brand-orange">{matches.length}</span> 位人員
+          篩出 <span className="font-bold text-brand-orange">{totalResultCount}</span> 位人員
         </div>
       </div>
 
@@ -419,7 +514,7 @@ export const WeeklyMultiRuleFilterView = ({
           >
             <div className="text-xs font-bold text-brand-orange">規則 {index + 1}</div>
             <div className="text-sm font-semibold text-brand-slate mt-1">
-              {rule.startTime}~{rule.endTime} 內 {rule.duration} 分鐘空檔
+              {rule.startTime}~{rule.endTime}，至少 {rule.duration} 分鐘
             </div>
             <div className="text-[11px] text-slate-400 mt-1">
               {rule.weekdays.map((day) => DAY_NAMES[day]).join("、")}
@@ -430,103 +525,49 @@ export const WeeklyMultiRuleFilterView = ({
         ))}
       </div>
 
-      {matches.length === 0 ? (
+      {matches.length === 0 && offDutyMatches.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center text-slate-500">
-          沒有人員同時符合所有規則。
+          目前沒有符合規則或落在休假 / 例假的人員
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {matches.map((match) => (
-            <div
-              key={match.staff.staffKey || match.staff.id || match.staff.name}
-              className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-base font-bold text-brand-slate">
-                    {match.staff.name}
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    已通過 {match.passCount} / {match.ruleSummaries.length} 組規則
-                  </p>
-                </div>
-                <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold shrink-0">
-                  全部通過
-                </span>
+        <div className="space-y-6">
+          {matches.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-sm font-bold text-emerald-700">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                規則通過人員 ({matches.length})
               </div>
-
-              <div className="space-y-3">
-                {match.ruleSummaries.map((rule) => (
-                  <div
-                    key={rule.id}
-                    className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4 space-y-3"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-xs font-bold text-brand-orange">
-                          規則 {rule.order}
-                        </div>
-                        <div className="text-sm font-semibold text-brand-slate mt-1">
-                          {rule.startTime}~{rule.endTime} / {rule.duration} 分鐘
-                        </div>
-                      </div>
-                      <span className="text-[11px] text-slate-400">
-                        {rule.includePotential ? "含可調整" : "僅直接可排"}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-7 gap-2">
-                      {rule.dayStatuses.map((day) => (
-                        <div
-                          key={`${rule.id}-${day.date}`}
-                          className={cn(
-                            "rounded-xl border px-2 py-3 text-center",
-                            day.status === "available"
-                              ? "bg-emerald-50 border-emerald-200"
-                              : day.status === "potential"
-                                ? "bg-amber-50 border-amber-200"
-                                : "bg-white border-slate-200",
-                          )}
-                        >
-                          <div
-                            className={cn(
-                              "text-[10px] font-bold",
-                              day.status === "available"
-                                ? "text-emerald-600"
-                                : day.status === "potential"
-                                  ? "text-amber-600"
-                                  : "text-slate-400",
-                            )}
-                          >
-                            {DAY_NAMES[day.weekday]}
-                          </div>
-                          <div className="text-sm font-bold mt-1 text-brand-slate">
-                            {format(new Date(day.date), "d")}
-                          </div>
-                          <div
-                            className={cn(
-                              "text-[10px] mt-1",
-                              day.status === "available"
-                                ? "text-emerald-500"
-                                : day.status === "potential"
-                                  ? "text-amber-500"
-                                  : "text-slate-300",
-                            )}
-                          >
-                            {day.status === "available"
-                              ? "可排"
-                              : day.status === "potential"
-                                ? "可調整"
-                                : "未符合"}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {matches.map((match) =>
+                  renderRuleCard(
+                    match,
+                    "已通過",
+                    "bg-emerald-100 text-emerald-700",
+                    `通過規則 ${match.passCount} / ${match.ruleSummaries.length}`,
+                  ),
+                )}
               </div>
             </div>
-          ))}
+          )}
+
+          {offDutyMatches.length > 0 && (
+            <div className="space-y-4 border-t border-slate-100 pt-6">
+              <div className="flex items-center gap-2 text-sm font-bold text-slate-500">
+                <span className="h-2 w-2 rounded-full bg-slate-300" />
+                休假 / 例假人員 ({offDutyMatches.length})
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {offDutyMatches.map((match) =>
+                  renderRuleCard(
+                    match,
+                    "休假 / 例假",
+                    "bg-slate-100 text-slate-500",
+                    "所選規則日包含休假或例假",
+                  ),
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

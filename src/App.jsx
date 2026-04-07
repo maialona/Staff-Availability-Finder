@@ -296,7 +296,7 @@ const TimePicker = ({ value, onChange, placeholder = "選擇時間" }) => {
   const hours = Array.from({ length: 24 }, (_, i) =>
     String(i).padStart(2, "0"),
   );
-  const minutes = ["00", "15", "30", "45"];
+  const minutes = ["00", "10", "20", "30", "40", "50"];
   const [selH, selM] = value ? value.split(":") : [null, null];
   const hourRef = useRef(null);
 
@@ -1085,7 +1085,7 @@ function App() {
     [advancedWeekRules],
   );
 
-  const multiRuleWeeklyMatches = useMemo(() => {
+  const multiRuleWeeklyResult = useMemo(() => {
     if (
       viewMode !== "week" ||
       filterMode !== "service" ||
@@ -1133,11 +1133,25 @@ function App() {
                 (person.staff.staffKey || person.staff.id || person.staff.name) ===
                 staffKey,
             );
+            const offDutyPerson = dayResult.offDuty.find(
+              (person) =>
+                (person.staff.staffKey || person.staff.id || person.staff.name) ===
+                staffKey,
+            );
+
+            let status = "none";
+            if (available) {
+              status = "available";
+            } else if (potential) {
+              status = "potential";
+            } else if (offDutyPerson) {
+              status = "off";
+            }
 
             return {
               date: dayResult.date,
               weekday: new Date(dayResult.date).getDay(),
-              status: available ? "available" : potential ? "potential" : "none",
+              status,
             };
           });
 
@@ -1166,8 +1180,25 @@ function App() {
           passCount: ruleSummaries.filter((rule) => rule.passes).length,
         };
       })
-      .filter((entry) => entry.ruleSummaries.every((rule) => rule.passes))
-      .sort((a, b) => a.staff.name.localeCompare(b.staff.name, "zh-Hant"));
+      .reduce(
+        (acc, entry) => {
+          const passesAllRules = entry.ruleSummaries.every((rule) => rule.passes);
+          const hasOffDuty = entry.ruleSummaries.some((rule) =>
+            rule.dayStatuses.some(
+              (day) => day.status === "off",
+            ),
+          );
+
+          if (passesAllRules) {
+            acc.matches.push(entry);
+          } else if (hasOffDuty) {
+            acc.offDutyMatches.push(entry);
+          }
+
+          return acc;
+        },
+        { matches: [], offDutyMatches: [] },
+      );
   }, [
     viewMode,
     filterMode,
@@ -1178,6 +1209,17 @@ function App() {
     caseSettings,
     activeStaffData,
   ]);
+
+  const sortedMultiRuleWeeklyResult = useMemo(() => {
+    if (!multiRuleWeeklyResult) return null;
+
+    const sortByName = (a, b) => a.staff.name.localeCompare(b.staff.name, "zh-Hant");
+
+    return {
+      matches: [...multiRuleWeeklyResult.matches].sort(sortByName),
+      offDutyMatches: [...multiRuleWeeklyResult.offDutyMatches].sort(sortByName),
+    };
+  }, [multiRuleWeeklyResult]);
 
   const aggregatedServiceWeekMatches = useMemo(() => {
     if (
@@ -2481,7 +2523,8 @@ function App() {
           /* Scenario C: Week View (with or without filter) */
           filterMode === "service" && weekRuleMode === "rules" ? (
             <WeeklyMultiRuleFilterView
-              matches={multiRuleWeeklyMatches || []}
+              matches={sortedMultiRuleWeeklyResult?.matches || []}
+              offDutyMatches={sortedMultiRuleWeeklyResult?.offDutyMatches || []}
               rules={normalizedAdvancedWeekRules}
               selectedDate={selectedDate}
               cn={cn}
