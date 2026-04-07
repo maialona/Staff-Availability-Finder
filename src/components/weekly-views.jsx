@@ -440,7 +440,17 @@ export const WeeklyMultiRuleFilterView = ({
     };
   };
 
-  const renderRuleCard = (match, badgeLabel, badgeClassName, subtitle) => {
+  const renderRuleCard = (
+    match,
+    badgeLabel,
+    badgeClassName,
+    subtitle,
+    options = {},
+  ) => {
+    const {
+      showLeaveBadge = true,
+      statusFilter = null,
+    } = options;
     const hasLeave = match.ruleSummaries.some((rule) =>
       rule.dayStatuses.some((day) => day.status === "off_leave"),
     );
@@ -456,7 +466,7 @@ export const WeeklyMultiRuleFilterView = ({
             <p className="text-xs text-slate-400 mt-1">{subtitle}</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {hasLeave && (
+            {showLeaveBadge && hasLeave && (
               <span className="px-3 py-1 rounded-full text-xs font-bold bg-sky-100 text-sky-700">
                 休假
               </span>
@@ -473,11 +483,20 @@ export const WeeklyMultiRuleFilterView = ({
         </div>
 
         <div className="space-y-3">
-          {match.ruleSummaries.map((rule) => (
-            <div
-              key={rule.id}
-              className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4 space-y-3"
-            >
+          {match.ruleSummaries.map((rule) => {
+            const visibleDays = statusFilter
+              ? rule.dayStatuses.filter((day) => statusFilter(day.status))
+              : rule.dayStatuses;
+
+            if (visibleDays.length === 0) {
+              return null;
+            }
+
+            return (
+              <div
+                key={rule.id}
+                className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4 space-y-3"
+              >
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-xs font-bold text-brand-orange">規則 {rule.order}</div>
@@ -491,7 +510,7 @@ export const WeeklyMultiRuleFilterView = ({
               </div>
 
               <div className="grid grid-cols-7 gap-2">
-                {rule.dayStatuses.map((day) => {
+                {visibleDays.map((day) => {
                   const style = getStatusStyle(day.status);
 
                   return (
@@ -511,7 +530,8 @@ export const WeeklyMultiRuleFilterView = ({
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -590,6 +610,10 @@ export const WeeklyMultiRuleFilterView = ({
                     "例假",
                     "bg-slate-100 text-slate-500",
                     "所選規則日包含例假",
+                    {
+                      showLeaveBadge: false,
+                      statusFilter: (status) => status === "off_regular",
+                    },
                   ),
                 )}
               </div>
