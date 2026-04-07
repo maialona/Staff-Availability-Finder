@@ -1155,7 +1155,8 @@ function App() {
             } else if (potential) {
               status = "potential";
             } else if (offDutyPerson) {
-              status = "off";
+              status =
+                offDutyPerson.dayType === "例" ? "off_regular" : "off_leave";
             }
 
             return {
@@ -1167,8 +1168,10 @@ function App() {
 
           const passes = dayStatuses.every((day) =>
             rule.includePotential
-              ? day.status === "available" || day.status === "potential"
-              : day.status === "available",
+              ? day.status === "available" ||
+                day.status === "potential" ||
+                day.status === "off_leave"
+              : day.status === "available" || day.status === "off_leave",
           );
 
           return {
@@ -1193,15 +1196,15 @@ function App() {
       .reduce(
         (acc, entry) => {
           const passesAllRules = entry.ruleSummaries.every((rule) => rule.passes);
-          const hasOffDuty = entry.ruleSummaries.some((rule) =>
+          const hasRegularOffDuty = entry.ruleSummaries.some((rule) =>
             rule.dayStatuses.some(
-              (day) => day.status === "off",
+              (day) => day.status === "off_regular",
             ),
           );
 
           if (passesAllRules) {
             acc.matches.push(entry);
-          } else if (hasOffDuty) {
+          } else if (hasRegularOffDuty) {
             acc.offDutyMatches.push(entry);
           }
 
