@@ -1155,8 +1155,8 @@ function App() {
             } else if (potential) {
               status = "potential";
             } else if (offDutyPerson) {
-              status =
-                offDutyPerson.dayType === "例" ? "off_regular" : "off_leave";
+              const dayType = String(offDutyPerson.dayType || "");
+              status = dayType.includes("例") ? "off_regular" : "off_leave";
             }
 
             return {
