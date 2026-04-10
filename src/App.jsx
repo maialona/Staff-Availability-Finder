@@ -95,6 +95,107 @@ const normalizeCrossOrgStaffName = (name = "") =>
     .replace(/\s*[（(][^)）]+[)）]\s*$/, "")
     .trim();
 
+const parseDateTimeForFilter = (dateStr, timeStr) => {
+  if (!dateStr || !timeStr) return null;
+  const [hours, minutes] = String(timeStr).split(":").map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+  const parsed = new Date(dateStr);
+  parsed.setHours(hours, minutes, 0, 0);
+  return parsed;
+};
+
+const clipInterval = (interval, rangeStart, rangeEnd) => {
+  const start = new Date(Math.max(interval.start.getTime(), rangeStart.getTime()));
+  const end = new Date(Math.min(interval.end.getTime(), rangeEnd.getTime()));
+  if (end <= start) return null;
+  return { start, end };
+};
+
+const subtractInterval = (interval, visibleInterval) => {
+  if (!visibleInterval) return [{ start: interval.start, end: interval.end }];
+
+  const remaining = [];
+
+  if (visibleInterval.start > interval.start) {
+    remaining.push({
+      start: interval.start,
+      end: visibleInterval.start,
+    });
+  }
+
+  if (visibleInterval.end < interval.end) {
+    remaining.push({
+      start: visibleInterval.end,
+      end: interval.end,
+    });
+  }
+
+  return remaining;
+};
+
+const splitFreeIntervalsByFilter = ({
+  freeIntervals,
+  filterMode,
+  selectedDate,
+  filterStartTime,
+  filterEndTime,
+  servicePeriodStart,
+  servicePeriodEnd,
+  selectedDuration,
+}) => {
+  if (!Array.isArray(freeIntervals) || freeIntervals.length === 0) {
+    return { matching: [], hidden: [] };
+  }
+
+  const isManualMode =
+    filterMode !== "service" && filterStartTime && filterEndTime && selectedDate;
+  const isServiceMode =
+    filterMode === "service" &&
+    servicePeriodStart &&
+    servicePeriodEnd &&
+    selectedDuration &&
+    selectedDate;
+
+  if (!isManualMode && !isServiceMode) {
+    return { matching: freeIntervals, hidden: [] };
+  }
+
+  const rangeStart = parseDateTimeForFilter(
+    selectedDate,
+    isServiceMode ? servicePeriodStart : filterStartTime,
+  );
+  const rangeEnd = parseDateTimeForFilter(
+    selectedDate,
+    isServiceMode ? servicePeriodEnd : filterEndTime,
+  );
+
+  if (!rangeStart || !rangeEnd || rangeEnd <= rangeStart) {
+    return { matching: freeIntervals, hidden: [] };
+  }
+
+  const requiredMs = isServiceMode ? Number(selectedDuration) * 60000 : 0;
+  const matching = [];
+  const hidden = [];
+
+  freeIntervals.forEach((interval) => {
+    const visibleInterval = clipInterval(interval, rangeStart, rangeEnd);
+
+    if (
+      visibleInterval &&
+      (!isServiceMode ||
+        visibleInterval.end.getTime() - visibleInterval.start.getTime() >= requiredMs)
+    ) {
+      matching.push(visibleInterval);
+      hidden.push(...subtractInterval(interval, visibleInterval));
+      return;
+    }
+
+    hidden.push(interval);
+  });
+
+  return { matching, hidden };
+};
+
 const OrgDot = ({ staff, orgs }) => {
   if (!orgs || orgs.length <= 1 || staff.orgIdx === undefined) return null;
   const color = ORG_COLORS[staff.orgIdx % ORG_COLORS.length];
@@ -1365,7 +1466,16 @@ function App() {
         orgName: item.staff.org,
         originalName: item.staff.name,
         staff: item.staff,
-        free: item.free || [],
+        ...splitFreeIntervalsByFilter({
+          freeIntervals: item.free || [],
+          filterMode,
+          selectedDate,
+          filterStartTime,
+          filterEndTime,
+          servicePeriodStart,
+          servicePeriodEnd,
+          selectedDuration,
+        }),
       });
     });
 
@@ -1384,7 +1494,17 @@ function App() {
       .sort((a, b) =>
         a.normalizedName.localeCompare(b.normalizedName, "zh-Hant"),
       );
-  }, [activeFilterResult, activeOrgIds]);
+  }, [
+    activeFilterResult,
+    activeOrgIds,
+    filterMode,
+    selectedDate,
+    filterStartTime,
+    filterEndTime,
+    servicePeriodStart,
+    servicePeriodEnd,
+    selectedDuration,
+  ]);
 
   // Stats: service hours per staff (with 例/休 day breakdown)
   const statsData = useMemo(() => {
@@ -2473,8 +2593,8 @@ function App() {
                                   </span>
                                 </div>
                                 <div className="flex flex-wrap gap-1">
-                                  {entry.free.length > 0 ? (
-                                    entry.free.map((slot, slotIndex) => (
+                                  {entry.matching.length > 0 ? (
+                                    entry.matching.map((slot, slotIndex) => (
                                       <span
                                         key={`${entry.orgId}-${slotIndex}`}
                                         className="bg-white border border-slate-200 px-1.5 py-0.5 rounded shadow-sm text-[10px]"
@@ -2485,10 +2605,28 @@ function App() {
                                     ))
                                   ) : (
                                     <span className="text-[10px] text-slate-400">
-                                      無剩餘空檔
+                                      無符合篩選的空檔
                                     </span>
                                   )}
                                 </div>
+                                {entry.hidden.length > 0 && (
+                                  <details className="text-[10px] text-slate-500">
+                                    <summary className="cursor-pointer select-none text-slate-400 hover:text-slate-600">
+                                      展開其他剩餘空檔 ({entry.hidden.length})
+                                    </summary>
+                                    <div className="flex flex-wrap gap-1 mt-1.5">
+                                      {entry.hidden.map((slot, slotIndex) => (
+                                        <span
+                                          key={`${entry.orgId}-hidden-${slotIndex}`}
+                                          className="bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[10px]"
+                                        >
+                                          {format(slot.start, "HH:mm")}-
+                                          {format(slot.end, "HH:mm")}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </details>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -2506,7 +2644,19 @@ function App() {
                       完全空閒 ({activeFilterResult.available.length})
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {activeFilterResult.available.map((item, idx) => (
+                      {activeFilterResult.available.map((item, idx) => {
+                        const visibleFreeSlots = splitFreeIntervalsByFilter({
+                          freeIntervals: item.free || [],
+                          filterMode,
+                          selectedDate,
+                          filterStartTime,
+                          filterEndTime,
+                          servicePeriodStart,
+                          servicePeriodEnd,
+                          selectedDuration,
+                        });
+
+                        return (
                         <Card
                           key={idx}
                           className="p-4 flex flex-col gap-3 hover:shadow-md transition-shadow border-l-4 border-l-emerald-500"
@@ -2523,7 +2673,8 @@ function App() {
                               今日剩餘空檔:
                             </span>
                             <div className="flex flex-wrap gap-1">
-                              {item.free.map((f, i) => (
+                              {visibleFreeSlots.matching.length > 0 ? (
+                                visibleFreeSlots.matching.map((f, i) => (
                                 <span
                                   key={i}
                                   className="bg-white border border-slate-200 px-1.5 py-0.5 rounded shadow-sm"
@@ -2531,11 +2682,35 @@ function App() {
                                   {format(f.start, "HH:mm")}-
                                   {format(f.end, "HH:mm")}
                                 </span>
-                              ))}
+                                ))
+                              ) : (
+                                <span className="text-[10px] text-slate-400">
+                                  無符合篩選的空檔
+                                </span>
+                              )}
                             </div>
+                            {visibleFreeSlots.hidden.length > 0 && (
+                              <details className="mt-2 text-[10px] text-slate-500">
+                                <summary className="cursor-pointer select-none text-slate-400 hover:text-slate-600">
+                                  展開其他剩餘空檔 ({visibleFreeSlots.hidden.length})
+                                </summary>
+                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                  {visibleFreeSlots.hidden.map((f, i) => (
+                                    <span
+                                      key={`hidden-${i}`}
+                                      className="bg-white border border-slate-200 px-1.5 py-0.5 rounded shadow-sm"
+                                    >
+                                      {format(f.start, "HH:mm")}-
+                                      {format(f.end, "HH:mm")}
+                                    </span>
+                                  ))}
+                                </div>
+                              </details>
+                            )}
                           </div>
                         </Card>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
