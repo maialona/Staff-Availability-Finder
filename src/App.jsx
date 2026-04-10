@@ -89,6 +89,12 @@ const createAdvancedWeekRule = () => ({
   includePotential: true,
 });
 
+const normalizeCrossOrgStaffName = (name = "") =>
+  String(name)
+    .trim()
+    .replace(/\s*[（(][^)）]+[)）]\s*$/, "")
+    .trim();
+
 const OrgDot = ({ staff, orgs }) => {
   if (!orgs || orgs.length <= 1 || staff.orgIdx === undefined) return null;
   const color = ORG_COLORS[staff.orgIdx % ORG_COLORS.length];
@@ -1331,6 +1337,55 @@ function App() {
   const activeFilterResult = filteredStaffList || filteredByService;
   const activeWeeklyFilterResult = filteredWeeklyList || filteredByServiceWeekly;
 
+  const activeOrgIds = useMemo(() => {
+    if (selectedOrgIds.size > 0) return new Set(selectedOrgIds);
+    return new Set(orgs.map((org) => org.id));
+  }, [orgs, selectedOrgIds]);
+
+  const crossOrgAvailableMatches = useMemo(() => {
+    if (!activeFilterResult || activeOrgIds.size < 2) return [];
+
+    const groupedMatches = new Map();
+
+    activeFilterResult.available.forEach((item) => {
+      const normalizedName = normalizeCrossOrgStaffName(item.staff.name);
+      const orgId = item.staff.orgId;
+
+      if (!normalizedName || !orgId || !activeOrgIds.has(orgId)) return;
+
+      if (!groupedMatches.has(normalizedName)) {
+        groupedMatches.set(normalizedName, {
+          normalizedName,
+          orgMap: new Map(),
+        });
+      }
+
+      groupedMatches.get(normalizedName).orgMap.set(orgId, {
+        orgId,
+        orgName: item.staff.org,
+        originalName: item.staff.name,
+        staff: item.staff,
+        free: item.free || [],
+      });
+    });
+
+    return [...groupedMatches.values()]
+      .filter((entry) => activeOrgIds.size === entry.orgMap.size)
+      .map((entry) => {
+        const orgEntries = [...entry.orgMap.values()].sort((a, b) =>
+          a.orgName.localeCompare(b.orgName, "zh-Hant"),
+        );
+
+        return {
+          normalizedName: entry.normalizedName,
+          orgEntries,
+        };
+      })
+      .sort((a, b) =>
+        a.normalizedName.localeCompare(b.normalizedName, "zh-Hant"),
+      );
+  }, [activeFilterResult, activeOrgIds]);
+
   // Stats: service hours per staff (with 例/休 day breakdown)
   const statsData = useMemo(() => {
     if (!activeScheduleData.length || !activeStaffData.length) return [];
@@ -2370,6 +2425,79 @@ function App() {
               </div>
             ) : (
               <div className="space-y-6">
+                {crossOrgAvailableMatches.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-brand-slate font-bold text-sm">
+                      <Users className="w-4 h-4 text-brand-coral" />
+                      跨機構同時空閒 ({crossOrgAvailableMatches.length})
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {crossOrgAvailableMatches.map((match) => (
+                        <Card
+                          key={match.normalizedName}
+                          className="p-4 flex flex-col gap-3 hover:shadow-md transition-shadow border-l-4 border-l-brand-coral"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <h3 className="font-bold text-slate-900 text-base">
+                                {match.normalizedName}
+                              </h3>
+                              <p className="text-xs text-slate-400 mt-1">
+                                已同時符合 {match.orgEntries.length} 間機構
+                              </p>
+                            </div>
+                            <Badge variant="secondary">跨機構</Badge>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {match.orgEntries.map((entry) => (
+                              <span
+                                key={entry.orgId}
+                                className="text-[11px] bg-brand-lavender text-brand-slate px-2 py-0.5 rounded-full font-medium"
+                              >
+                                {entry.orgName}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="text-[11px] text-slate-500 bg-slate-50 p-2 rounded-lg space-y-2">
+                            {match.orgEntries.map((entry) => (
+                              <div
+                                key={`${entry.orgId}-${entry.originalName}`}
+                                className="space-y-1.5"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="font-bold text-slate-600">
+                                    {entry.orgName}
+                                  </span>
+                                  <span className="text-slate-500">
+                                    {entry.originalName}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                  {entry.free.length > 0 ? (
+                                    entry.free.map((slot, slotIndex) => (
+                                      <span
+                                        key={`${entry.orgId}-${slotIndex}`}
+                                        className="bg-white border border-slate-200 px-1.5 py-0.5 rounded shadow-sm text-[10px]"
+                                      >
+                                        {format(slot.start, "HH:mm")}-
+                                        {format(slot.end, "HH:mm")}
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="text-[10px] text-slate-400">
+                                      無剩餘空檔
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* 1. Fully Available */}
                 {activeFilterResult.available.length > 0 && (
                   <div className="space-y-3">
