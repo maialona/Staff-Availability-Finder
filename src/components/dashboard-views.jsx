@@ -6,6 +6,7 @@ import {
   Search,
   Copy,
   Check,
+  Download,
 } from "lucide-react";
 
 const SortBtn = ({ value, label, sortBy, setSortBy, cn }) => (
@@ -421,6 +422,211 @@ export const StatsView = ({
           </div>
         </Card>
       )}
+    </div>
+  );
+};
+
+export const StaffCaseSummaryView = ({
+  staffCaseSummaryData,
+  dataDateRange,
+  orgs = [],
+  cardComponent,
+  inputComponent,
+  orgDotComponent,
+  cn,
+}) => {
+  const Card = cardComponent;
+  const Input = inputComponent;
+  const OrgDot = orgDotComponent;
+  const [search, setSearch] = React.useState("");
+  const [exporting, setExporting] = React.useState(false);
+
+  const filtered = staffCaseSummaryData.filter((entry) =>
+    entry.staff.name.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  const totalStaff = filtered.length;
+  const totalCases = filtered.reduce((sum, entry) => sum + entry.totalCases, 0);
+  const totalSessions = filtered.reduce(
+    (sum, entry) => sum + entry.totalSessions,
+    0,
+  );
+
+  const handleExport = async () => {
+    if (filtered.length === 0 || exporting) return;
+
+    setExporting(true);
+
+    try {
+      const xlsx = await import("xlsx");
+
+      const summaryRows = filtered.map((entry) => ({
+        員工姓名: entry.staff.name,
+        所屬機構: entry.staff.org || "",
+        個案數: entry.totalCases,
+        服務總次數: entry.totalSessions,
+        個案名單: entry.cases.map((caseEntry) => caseEntry.caseName).join("、"),
+      }));
+
+      const detailRows = filtered.flatMap((entry) =>
+        entry.cases.flatMap((caseEntry) =>
+          caseEntry.dates.map((date) => ({
+            員工姓名: entry.staff.name,
+            所屬機構: entry.staff.org || "",
+            個案姓名: caseEntry.caseName,
+            服務次數: caseEntry.sessionCount,
+            服務日期: date,
+          })),
+        ),
+      );
+
+      const workbook = xlsx.utils.book_new();
+      const summarySheet = xlsx.utils.json_to_sheet(summaryRows);
+      const detailSheet = xlsx.utils.json_to_sheet(detailRows);
+
+      xlsx.utils.book_append_sheet(workbook, summarySheet, "員工個案統計");
+      xlsx.utils.book_append_sheet(workbook, detailSheet, "服務日期明細");
+
+      xlsx.writeFile(workbook, "員工個案統計.xlsx");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6 anim-fade-up anim-delay-2">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-brand-slate">員工個案統計</h2>
+          {dataDateRange && (
+            <p className="text-sm text-slate-500 font-medium">
+              統計區間：{dataDateRange}
+            </p>
+          )}
+        </div>
+        <button
+          onClick={handleExport}
+          disabled={filtered.length === 0 || exporting}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-colors",
+            filtered.length === 0 || exporting
+              ? "cursor-not-allowed bg-slate-100 text-slate-400"
+              : "bg-brand-coral text-white shadow hover:bg-brand-coral/90",
+          )}
+        >
+          <Download className="w-4 h-4" />
+          <span>{exporting ? "匯出中..." : "匯出 XLSX"}</span>
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {[
+          { label: "員工人數", value: totalStaff, unit: "人" },
+          { label: "個案總數", value: totalCases, unit: "位" },
+          { label: "服務總次數", value: totalSessions, unit: "次" },
+        ].map((item) => (
+          <Card key={item.label} className="p-5 text-center">
+            <div className="text-2xl font-bold text-brand-slate">
+              {item.value}
+              <span className="text-sm font-medium text-slate-400 ml-1">
+                {item.unit}
+              </span>
+            </div>
+            <div className="text-xs text-slate-400 font-medium mt-1">
+              {item.label}
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <Card className="border-none shadow-[0_8px_30px_rgba(0,0,0,0.04)] overflow-hidden">
+        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="relative max-w-xs w-full">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Input
+              placeholder="搜尋員工姓名..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="pl-9 h-9 text-sm"
+            />
+          </div>
+          <div className="text-xs text-slate-400 font-medium">
+            依個案數排序，卡片內依服務次數排序
+          </div>
+        </div>
+
+        {filtered.length === 0 ? (
+          <div className="py-14 text-center text-slate-400 text-sm">
+            找不到符合條件的員工資料
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 p-4">
+            {filtered.map((entry) => (
+              <Card
+                key={entry.staff.staffKey || entry.staff.id}
+                className="p-5 flex flex-col gap-4 hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="font-bold text-brand-slate text-base flex items-center gap-1">
+                      <OrgDot staff={entry.staff} orgs={orgs} />
+                      {entry.staff.name}
+                    </h3>
+                    {entry.staff.org && (
+                      <p className="text-xs text-slate-400 mt-1">{entry.staff.org}</p>
+                    )}
+                  </div>
+                  <div className="text-right text-xs text-slate-500">
+                    <div className="font-bold text-brand-coral">
+                      {entry.totalCases} 位個案
+                    </div>
+                    <div className="mt-1">{entry.totalSessions} 次服務</div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {entry.cases.map((caseEntry) => (
+                    <details
+                      key={`${entry.staff.staffKey || entry.staff.id}-${caseEntry.caseName}`}
+                      className="group rounded-2xl border border-slate-200 bg-slate-50/60 px-4 py-3"
+                    >
+                      <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-slate-700">
+                            {caseEntry.caseName}
+                          </p>
+                          <p className="text-[11px] text-slate-400 mt-1">
+                            {caseEntry.dates.length} 天服務
+                          </p>
+                        </div>
+                        <div
+                          className={cn(
+                            "shrink-0 rounded-full px-2.5 py-1 text-xs font-bold",
+                            "bg-white border border-slate-200 text-brand-coral",
+                          )}
+                        >
+                          {caseEntry.sessionCount} 次
+                        </div>
+                      </summary>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {caseEntry.dates.map((date) => (
+                          <span
+                            key={`${caseEntry.caseName}-${date}`}
+                            className="rounded-full bg-white border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600"
+                          >
+                            {date}
+                          </span>
+                        ))}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   );
 };

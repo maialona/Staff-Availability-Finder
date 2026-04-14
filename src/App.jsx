@@ -46,7 +46,11 @@ import {
   parseCaseScheduleWorkbook,
   parseOrgWorkbook,
 } from "./utils/workbook";
-import { CaseScheduleView, StatsView } from "./components/dashboard-views";
+import {
+  CaseScheduleView,
+  StaffCaseSummaryView,
+  StatsView,
+} from "./components/dashboard-views";
 import {
   TimelineBar,
   WeeklyAggregateFilterView,
@@ -1718,6 +1722,105 @@ function App() {
       .sort((a, b) => b.totalMinutes - a.totalMinutes);
   }, [activeScheduleData, activeStaffData]);
 
+  const staffCaseSummaryData = useMemo(() => {
+    if (!activeScheduleData.length || !activeStaffData.length) return [];
+
+    const staffMap = new Map(
+      activeStaffData.map((staff) => [
+        staff.staffKey || staff.id,
+        {
+          staff,
+          totalSessions: 0,
+          cases: new Map(),
+        },
+      ]),
+    );
+
+    const normalizeDate = (dateVal) => {
+      try {
+        if (dateVal instanceof Date && isValid(dateVal)) {
+          return format(dateVal, "yyyy-MM-dd");
+        }
+
+        const parsed = new Date(dateVal);
+        return isValid(parsed) ? format(parsed, "yyyy-MM-dd") : "";
+      } catch {
+        return "";
+      }
+    };
+
+    activeScheduleData.forEach((record) => {
+      const staffKey =
+        record.__staffKey ||
+        `${record.__orgId || "legacy"}::NAME::${record["服務人員"] || ""}`;
+      const timeValue = String(record["服務時間"] || "").trim();
+
+      if (
+        !staffKey ||
+        !staffMap.has(staffKey) ||
+        !timeValue ||
+        timeValue === "例" ||
+        timeValue === "休" ||
+        timeValue === "_transit" ||
+        timeValue === "_national"
+      ) {
+        return;
+      }
+
+      const caseMatch = timeValue.match(
+        /\d{1,2}:\d{2}\s*[~～-]\s*\d{1,2}:\d{2}\s+(.+)$/,
+      );
+      const caseName = caseMatch?.[1]?.trim();
+      if (!caseName) return;
+
+      const dateStr = normalizeDate(record["服務日期"]);
+      const staffEntry = staffMap.get(staffKey);
+      staffEntry.totalSessions += 1;
+
+      if (!staffEntry.cases.has(caseName)) {
+        staffEntry.cases.set(caseName, {
+          caseName,
+          sessionCount: 0,
+          dates: new Set(),
+        });
+      }
+
+      const caseEntry = staffEntry.cases.get(caseName);
+      caseEntry.sessionCount += 1;
+      if (dateStr) {
+        caseEntry.dates.add(dateStr);
+      }
+    });
+
+    return [...staffMap.values()]
+      .map((entry) => ({
+        staff: entry.staff,
+        totalCases: entry.cases.size,
+        totalSessions: entry.totalSessions,
+        cases: [...entry.cases.values()]
+          .map((caseEntry) => ({
+            caseName: caseEntry.caseName,
+            sessionCount: caseEntry.sessionCount,
+            dates: [...caseEntry.dates].sort((a, b) => a.localeCompare(b)),
+          }))
+          .sort((a, b) => {
+            if (b.sessionCount !== a.sessionCount) {
+              return b.sessionCount - a.sessionCount;
+            }
+
+            return a.caseName.localeCompare(b.caseName, "zh-Hant");
+          }),
+      }))
+      .filter((entry) => entry.totalCases > 0)
+      .sort((a, b) => {
+        if (b.totalCases !== a.totalCases) {
+          return b.totalCases - a.totalCases;
+        }
+
+        return a.staff.name.localeCompare(b.staff.name, "zh-Hant");
+      });
+  }, [activeScheduleData, activeStaffData]);
+
   // --- Render Components ---
 
   if (!isHydrated) {
@@ -2080,6 +2183,18 @@ function App() {
               >
                 <BarChart2 className="w-4 h-4" />
                 <span>時數統計</span>
+              </button>
+              <button
+                onClick={() => setViewMode("staff-cases")}
+                className={cn(
+                  "px-6 py-2 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center space-x-2",
+                  viewMode === "staff-cases"
+                    ? "bg-white text-brand-slate shadow-lg"
+                    : "text-white/60 hover:text-white",
+                )}
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>員工個案統計</span>
               </button>
             </div>
 
@@ -2814,6 +2929,16 @@ function App() {
         ) : viewMode === "stats" ? (
           <StatsView
             statsData={statsData}
+            dataDateRange={dataDateRange}
+            orgs={orgs}
+            cardComponent={Card}
+            inputComponent={Input}
+            orgDotComponent={OrgDot}
+            cn={cn}
+          />
+        ) : viewMode === "staff-cases" ? (
+          <StaffCaseSummaryView
+            staffCaseSummaryData={staffCaseSummaryData}
             dataDateRange={dataDateRange}
             orgs={orgs}
             cardComponent={Card}
