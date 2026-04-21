@@ -459,6 +459,7 @@ export function parseOrgWorkbook({
 
     return {
       ...staff,
+      sheetOrder: index,
       id: sourceStaffId,
       sourceStaffId,
       name,

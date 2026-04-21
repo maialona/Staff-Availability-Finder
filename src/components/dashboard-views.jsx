@@ -3,7 +3,6 @@ import {
   Upload,
   FileSpreadsheet,
   XCircle,
-  Search,
   Copy,
   Check,
   Download,
@@ -64,10 +63,8 @@ export const StatsView = ({
   cn,
 }) => {
   const Card = cardComponent;
-  const Input = inputComponent;
   const OrgDot = orgDotComponent;
-  const [sortBy, setSortBy] = React.useState("hours");
-  const [search, setSearch] = React.useState("");
+  const [sortBy, setSortBy] = React.useState("sheet");
   const [viewMode, setViewMode] = React.useState("chart");
   const [mounted, setMounted] = React.useState(false);
   const [copiedGrid, setCopiedGrid] = React.useState(false);
@@ -80,10 +77,18 @@ export const StatsView = ({
   }, []);
 
   const sorted = [...statsData]
-    .filter((staffStat) =>
-      staffStat.staff.name.toLowerCase().includes(search.toLowerCase()),
-    )
     .sort((a, b) => {
+      if (sortBy === "sheet") {
+        const orgOrderA = a.staff.orgIdx ?? 0;
+        const orgOrderB = b.staff.orgIdx ?? 0;
+        if (orgOrderA !== orgOrderB) return orgOrderA - orgOrderB;
+
+        const sheetOrderA = a.staff.sheetOrder ?? Number.MAX_SAFE_INTEGER;
+        const sheetOrderB = b.staff.sheetOrder ?? Number.MAX_SAFE_INTEGER;
+        if (sheetOrderA !== sheetOrderB) return sheetOrderA - sheetOrderB;
+
+        return a.staff.name.localeCompare(b.staff.name, "zh-Hant");
+      }
       if (sortBy === "sessions") return b.sessions - a.sessions;
       if (sortBy === "days") return b.days - a.days;
       return b.totalMinutes - a.totalMinutes;
@@ -138,14 +143,7 @@ export const StatsView = ({
       </div>
 
       <Card className="border-none shadow-[0_8px_30px_rgba(0,0,0,0.04)] overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <Input
-            placeholder="搜尋姓名..."
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="max-w-xs h-9 text-sm"
-          />
-          <div className="flex items-center gap-3 flex-wrap">
+        <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-end gap-3">
             <div className="flex items-center gap-3 text-[11px] font-medium text-slate-500 border-r border-slate-200 pr-3">
               <span className="flex items-center gap-1">
                 <span className="w-3 h-3 rounded-sm bg-brand-coral inline-block"></span>
@@ -166,6 +164,13 @@ export const StatsView = ({
             </div>
             <div className="flex items-center gap-2 border-r border-slate-200 pr-3">
               <span className="text-xs text-slate-400 font-medium">排序：</span>
+              <SortBtn
+                value="sheet"
+                label="工作表順序"
+                sortBy={sortBy}
+                setSortBy={setSortBy}
+                cn={cn}
+              />
               <SortBtn
                 value="hours"
                 label="總時數"
@@ -215,7 +220,6 @@ export const StatsView = ({
                 表格式排行
               </button>
             </div>
-          </div>
         </div>
 
         {viewMode === "chart" ? (

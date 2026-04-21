@@ -107,6 +107,8 @@ export const normalizeOrgData = (orgs = []) =>
 
       return {
         ...staff,
+        sheetOrder:
+          Number.isFinite(Number(staff.sheetOrder)) ? Number(staff.sheetOrder) : staffIndex,
         id: sourceStaffId,
         sourceStaffId,
         name: rawName,
