@@ -6,6 +6,9 @@ import {
   Search,
   Copy,
   Check,
+  Download,
+  BarChart3,
+  LayoutGrid,
 } from "lucide-react";
 
 const SortBtn = ({ value, label, sortBy, setSortBy, cn }) => (
@@ -22,6 +25,35 @@ const SortBtn = ({ value, label, sortBy, setSortBy, cn }) => (
   </button>
 );
 
+const STATS_GRID_COLUMNS = 4;
+
+const buildStatsGridRows = (items, columns = STATS_GRID_COLUMNS) => {
+  const rows = [];
+
+  for (let index = 0; index < items.length; index += columns) {
+    const row = items.slice(index, index + columns);
+    while (row.length < columns) {
+      row.push(null);
+    }
+    rows.push(row);
+  }
+
+  return rows;
+};
+
+const formatStatsHours = (value) => (value || value === 0 ? `${value}` : "-");
+
+const buildStatsGridCopyText = (rows) =>
+  rows
+    .map((row) =>
+      row
+        .flatMap((item) =>
+          item ? [item.staff.name, formatStatsHours(item.totalHours)] : ["", ""],
+        )
+        .join("\t"),
+    )
+    .join("\n");
+
 export const StatsView = ({
   statsData,
   dataDateRange,
@@ -36,7 +68,9 @@ export const StatsView = ({
   const OrgDot = orgDotComponent;
   const [sortBy, setSortBy] = React.useState("hours");
   const [search, setSearch] = React.useState("");
+  const [viewMode, setViewMode] = React.useState("chart");
   const [mounted, setMounted] = React.useState(false);
+  const [copiedGrid, setCopiedGrid] = React.useState(false);
   const [copiedDetail, setCopiedDetail] = React.useState(false);
   const [copiedOT, setCopiedOT] = React.useState(false);
 
@@ -62,6 +96,13 @@ export const StatsView = ({
   const avgHours =
     scheduledCount > 0 ? +(totalHours / scheduledCount).toFixed(1) : 0;
   const maxMinutes = statsData[0]?.totalMinutes || 1;
+  const statsGridRows = buildStatsGridRows(sorted);
+
+  const handleGridCopy = () => {
+    navigator.clipboard.writeText(buildStatsGridCopyText(statsGridRows));
+    setCopiedGrid(true);
+    setTimeout(() => setCopiedGrid(false), 1500);
+  };
 
   return (
     <div className="space-y-6 anim-fade-up anim-delay-2">
@@ -123,7 +164,7 @@ export const StatsView = ({
                 例假日出勤
               </span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 border-r border-slate-200 pr-3">
               <span className="text-xs text-slate-400 font-medium">排序：</span>
               <SortBtn
                 value="hours"
@@ -147,119 +188,202 @@ export const StatsView = ({
                 cn={cn}
               />
             </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 font-medium">顯示：</span>
+              <button
+                onClick={() => setViewMode("chart")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors",
+                  viewMode === "chart"
+                    ? "bg-brand-coral text-white"
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200",
+                )}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                橫條圖
+              </button>
+              <button
+                onClick={() => setViewMode("grid")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors",
+                  viewMode === "grid"
+                    ? "bg-brand-coral text-white"
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200",
+                )}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                表格式排行
+              </button>
+            </div>
           </div>
         </div>
 
-        <div className="divide-y divide-slate-50 max-h-[60vh] overflow-y-auto">
-          {sorted.map((item, index) => {
-            const normalPct = mounted ? (item.normalMinutes / maxMinutes) * 100 : 0;
-            const otPct = mounted ? (item.overtimeMinutes / maxMinutes) * 100 : 0;
-            const restPct = mounted ? (item.restDayMinutes / maxMinutes) * 100 : 0;
-            const holPct = mounted ? (item.holidayMinutes / maxMinutes) * 100 : 0;
-            const delay = `${Math.min(index * 40, 600)}ms`;
-            const hasExtra =
-              item.overtimeMinutes > 0 ||
-              item.restDayMinutes > 0 ||
-              item.holidayMinutes > 0;
+        {viewMode === "chart" ? (
+          <div className="divide-y divide-slate-50 max-h-[60vh] overflow-y-auto">
+            {sorted.map((item, index) => {
+              const normalPct = mounted ? (item.normalMinutes / maxMinutes) * 100 : 0;
+              const otPct = mounted ? (item.overtimeMinutes / maxMinutes) * 100 : 0;
+              const restPct = mounted ? (item.restDayMinutes / maxMinutes) * 100 : 0;
+              const holPct = mounted ? (item.holidayMinutes / maxMinutes) * 100 : 0;
+              const delay = `${Math.min(index * 40, 600)}ms`;
+              const hasExtra =
+                item.overtimeMinutes > 0 ||
+                item.restDayMinutes > 0 ||
+                item.holidayMinutes > 0;
 
-            return (
-              <div
-                key={item.staff.id}
-                className="grid grid-cols-[36px_1fr_72px_72px_160px_1fr] items-center gap-3 px-6 py-3 hover:bg-slate-50 transition-colors"
-              >
-                <span
-                  className={cn(
-                    "text-xs font-bold text-center w-7 h-7 rounded-full flex items-center justify-center",
-                    index === 0
-                      ? "bg-yellow-100 text-yellow-600"
-                      : index === 1
-                        ? "bg-slate-100 text-slate-500"
-                        : index === 2
-                          ? "bg-orange-100 text-orange-500"
-                          : "text-slate-300",
-                  )}
+              return (
+                <div
+                  key={item.staff.id}
+                  className="grid grid-cols-[36px_1fr_72px_72px_160px_1fr] items-center gap-3 px-6 py-3 hover:bg-slate-50 transition-colors"
                 >
-                  {index + 1}
-                </span>
+                  <span
+                    className={cn(
+                      "text-xs font-bold text-center w-7 h-7 rounded-full flex items-center justify-center",
+                      index === 0
+                        ? "bg-yellow-100 text-yellow-600"
+                        : index === 1
+                          ? "bg-slate-100 text-slate-500"
+                          : index === 2
+                            ? "bg-orange-100 text-orange-500"
+                            : "text-slate-300",
+                    )}
+                  >
+                    {index + 1}
+                  </span>
 
-                <span className="font-bold text-sm text-brand-slate truncate flex items-center gap-1">
-                  <OrgDot staff={item.staff} orgs={orgs} />
-                  {item.staff.name}
-                </span>
+                  <span className="font-bold text-sm text-brand-slate truncate flex items-center gap-1">
+                    <OrgDot staff={item.staff} orgs={orgs} />
+                    {item.staff.name}
+                  </span>
 
-                <div className="text-center">
-                  <div className="text-sm font-bold text-slate-700">
-                    {item.sessions}
-                  </div>
-                  <div className="text-[10px] text-slate-400">場次</div>
-                </div>
-
-                <div className="text-center">
-                  <div className="text-sm font-bold text-slate-700">{item.days}</div>
-                  <div className="text-[10px] text-slate-400">服務日</div>
-                </div>
-
-                <div className="text-right leading-tight">
-                  <div>
-                    <span className="text-sm font-bold text-brand-coral">
-                      {item.totalHours}
-                    </span>
-                    <span className="text-[10px] text-slate-400 ml-1">小時</span>
-                  </div>
-                  {hasExtra && (
-                    <div className="text-[10px] text-slate-400 space-x-2 mt-0.5">
-                      {item.overtimeMinutes > 0 && (
-                        <span className="text-violet-500">加{item.overtimeHours}h</span>
-                      )}
-                      {item.restDayMinutes > 0 && (
-                        <span className="text-sky-500">休{item.restDayHours}h</span>
-                      )}
-                      {item.holidayMinutes > 0 && (
-                        <span className="text-amber-500">例{item.holidayHours}h</span>
-                      )}
+                  <div className="text-center">
+                    <div className="text-sm font-bold text-slate-700">
+                      {item.sessions}
                     </div>
-                  )}
-                </div>
+                    <div className="text-[10px] text-slate-400">場次</div>
+                  </div>
 
-                <div className="bg-slate-100 rounded-full h-2.5 overflow-hidden flex">
-                  {item.normalMinutes > 0 && (
-                    <div
-                      className="h-full bg-brand-coral transition-all duration-700 ease-out"
-                      style={{ width: `${normalPct}%`, transitionDelay: delay }}
-                      title={`平日正常 ${item.normalHours}h`}
-                    />
-                  )}
-                  {item.overtimeMinutes > 0 && (
-                    <div
-                      className="h-full bg-violet-400 transition-all duration-700 ease-out"
-                      style={{ width: `${otPct}%`, transitionDelay: delay }}
-                      title={`加班 ${item.overtimeHours}h`}
-                    />
-                  )}
-                  {item.restDayMinutes > 0 && (
-                    <div
-                      className="h-full bg-sky-400 transition-all duration-700 ease-out"
-                      style={{ width: `${restPct}%`, transitionDelay: delay }}
-                      title={`休假日出勤 ${item.restDayHours}h`}
-                    />
-                  )}
-                  {item.holidayMinutes > 0 && (
-                    <div
-                      className="h-full bg-amber-400 transition-all duration-700 ease-out"
-                      style={{ width: `${holPct}%`, transitionDelay: delay }}
-                      title={`例假日出勤 ${item.holidayHours}h`}
-                    />
-                  )}
+                  <div className="text-center">
+                    <div className="text-sm font-bold text-slate-700">{item.days}</div>
+                    <div className="text-[10px] text-slate-400">服務日</div>
+                  </div>
+
+                  <div className="text-right leading-tight">
+                    <div>
+                      <span className="text-sm font-bold text-brand-coral">
+                        {item.totalHours}
+                      </span>
+                      <span className="text-[10px] text-slate-400 ml-1">小時</span>
+                    </div>
+                    {hasExtra && (
+                      <div className="text-[10px] text-slate-400 space-x-2 mt-0.5">
+                        {item.overtimeMinutes > 0 && (
+                          <span className="text-violet-500">加{item.overtimeHours}h</span>
+                        )}
+                        {item.restDayMinutes > 0 && (
+                          <span className="text-sky-500">休{item.restDayHours}h</span>
+                        )}
+                        {item.holidayMinutes > 0 && (
+                          <span className="text-amber-500">例{item.holidayHours}h</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-slate-100 rounded-full h-2.5 overflow-hidden flex">
+                    {item.normalMinutes > 0 && (
+                      <div
+                        className="h-full bg-brand-coral transition-all duration-700 ease-out"
+                        style={{ width: `${normalPct}%`, transitionDelay: delay }}
+                        title={`平日正常 ${item.normalHours}h`}
+                      />
+                    )}
+                    {item.overtimeMinutes > 0 && (
+                      <div
+                        className="h-full bg-violet-400 transition-all duration-700 ease-out"
+                        style={{ width: `${otPct}%`, transitionDelay: delay }}
+                        title={`加班 ${item.overtimeHours}h`}
+                      />
+                    )}
+                    {item.restDayMinutes > 0 && (
+                      <div
+                        className="h-full bg-sky-400 transition-all duration-700 ease-out"
+                        style={{ width: `${restPct}%`, transitionDelay: delay }}
+                        title={`休假日出勤 ${item.restDayHours}h`}
+                      />
+                    )}
+                    {item.holidayMinutes > 0 && (
+                      <div
+                        className="h-full bg-amber-400 transition-all duration-700 ease-out"
+                        style={{ width: `${holPct}%`, transitionDelay: delay }}
+                        title={`例假日出勤 ${item.holidayHours}h`}
+                      />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {sorted.length === 0 && (
+              <div className="py-12 text-center text-slate-400 text-sm">
+                找不到符合的人員
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="bg-gradient-to-br from-[#fff7f3] via-white to-[#fffaf7]">
+            <div className="flex items-center justify-between gap-3 border-b border-brand-coral/10 bg-brand-coral/[0.03] px-4 py-3">
+              <p className="text-sm font-medium text-slate-500">
+                依目前搜尋與排序結果顯示姓名與總時數
+              </p>
+              <button
+                onClick={handleGridCopy}
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                title="複製表格式排行"
+              >
+                {copiedGrid ? (
+                  <Check size={15} className="text-emerald-500" />
+                ) : (
+                  <Copy size={15} />
+                )}
+              </button>
+            </div>
+            {sorted.length === 0 ? (
+              <div className="py-12 text-center text-sm text-slate-400">
+                找不到符合的人員
+              </div>
+            ) : (
+              <div className="overflow-x-auto px-4 py-4 md:px-5">
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                  <table className="min-w-[720px] w-full border-collapse table-fixed bg-white text-xs">
+                  <tbody>
+                    {statsGridRows.map((row, rowIndex) => (
+                      <tr key={`stats-grid-row-${rowIndex}`}>
+                        {row.map((item, columnIndex) => (
+                          <React.Fragment key={`stats-grid-cell-${rowIndex}-${columnIndex}`}>
+                            <td className="border border-slate-200 px-2 py-1.5 text-center text-sm font-bold text-brand-slate md:px-3 md:py-2">
+                              {item ? (
+                                <span className="inline-flex items-center justify-center gap-1.5">
+                                  <OrgDot staff={item.staff} orgs={orgs} />
+                                  <span>{item.staff.name}</span>
+                                </span>
+                              ) : (
+                                ""
+                              )}
+                            </td>
+                            <td className="border border-slate-200 bg-slate-50/70 px-2 py-1.5 text-center text-sm font-medium text-brand-coral md:px-3 md:py-2">
+                              {item ? formatStatsHours(item.totalHours) : ""}
+                            </td>
+                          </React.Fragment>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                  </table>
                 </div>
               </div>
-            );
-          })}
-          {sorted.length === 0 && (
-            <div className="py-12 text-center text-slate-400 text-sm">
-              找不到符合的人員
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </Card>
 
       {sorted.length > 0 && (
