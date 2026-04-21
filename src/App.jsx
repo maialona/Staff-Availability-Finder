@@ -1,9 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import {
   format,
-  addMinutes,
-  subMinutes,
-  areIntervalsOverlapping,
   isValid,
   startOfWeek,
   addDays,
@@ -28,9 +25,11 @@ import {
   BarChart2,
   ChevronLeft,
   ChevronRight,
+  Sparkles,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import { calculateDailyAvailability, applyServiceFilter } from "./utils/availability";
+import { applyTimeFilter } from "./utils/filtering";
 import {
   appStateService,
   caseScheduleService,
@@ -47,6 +46,7 @@ import {
   parseOrgWorkbook,
 } from "./utils/workbook";
 import { CaseScheduleView, StatsView } from "./components/dashboard-views";
+import { AgentSidebar } from "./components/agent-sidebar";
 import {
   TimelineBar,
   WeeklyAggregateFilterView,
@@ -54,6 +54,7 @@ import {
   WeeklyMultiRuleFilterView,
   WeeklyView,
 } from "./components/weekly-views";
+import { executeAgentQuery, SUPPORTED_AGENT_INTENTS } from "./utils/agent-query";
 import clsx from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -89,6 +90,15 @@ const createAdvancedWeekRule = () => ({
   includePotential: true,
 });
 
+const AGENT_EXAMPLE_PROMPTS = [
+  "4/2、4/5 13:00~14:00 有 30 分鐘空檔的有誰",
+  "本月每週三、四有 2 小時空閒的人有誰",
+  "王小明 4/6、4/9、4/20、4/30 有沒有空",
+];
+
+const AGENT_STREAM_CHUNK_SIZE = 8;
+const AGENT_STREAM_CHUNK_DELAY = 18;
+
 const normalizeCrossOrgStaffName = (name = "") =>
   String(name)
     .trim()
@@ -102,6 +112,61 @@ const parseDateTimeForFilter = (dateStr, timeStr) => {
   const parsed = new Date(dateStr);
   parsed.setHours(hours, minutes, 0, 0);
   return parsed;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const chunkAgentText = (text = "") => {
+  const chunks = [];
+  let buffer = "";
+
+  for (const char of String(text)) {
+    buffer += char;
+    if (char === "\n" || buffer.length >= AGENT_STREAM_CHUNK_SIZE) {
+      chunks.push(buffer);
+      buffer = "";
+    }
+  }
+
+  if (buffer) {
+    chunks.push(buffer);
+  }
+
+  return chunks;
+};
+
+const parseSseEventBlocks = (buffer) => {
+  const normalized = buffer.replace(/\r\n/g, "\n");
+  const parts = normalized.split("\n\n");
+  const complete = parts.slice(0, -1);
+  const remainder = parts[parts.length - 1] || "";
+  const events = [];
+
+  complete.forEach((part) => {
+    const lines = part.split("\n");
+    let eventName = "message";
+    const dataLines = [];
+
+    lines.forEach((line) => {
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trim());
+      }
+    });
+
+    if (dataLines.length === 0) return;
+
+    events.push({
+      event: eventName,
+      data: dataLines.join("\n"),
+    });
+  });
+
+  return {
+    events,
+    remainder,
+  };
 };
 
 const clipInterval = (interval, rangeStart, rangeEnd) => {
@@ -502,99 +567,6 @@ const TimePicker = ({ value, onChange, placeholder = "選擇時間" }) => {
   );
 };
 
-// Shared filter logic used by both single-day and weekly filter
-function applyTimeFilter(
-  dayAvailability,
-  dateStr,
-  filterStartTime,
-  filterEndTime,
-  bufferBuffer,
-  caseSettings,
-) {
-  const filterStart = new Date(dateStr);
-  const [sh, sm] = filterStartTime.split(":").map(Number);
-  filterStart.setHours(sh, sm, 0, 0);
-
-  const filterEnd = new Date(dateStr);
-  const [eh, em] = filterEndTime.split(":").map(Number);
-  filterEnd.setHours(eh, em, 0, 0);
-
-  if (!isValid(filterStart) || !isValid(filterEnd))
-    return { available: [], potential: [], offDuty: [] };
-
-  const reqInterval = { start: filterStart, end: filterEnd };
-  const reqIntervalWithBuffer = {
-    start: subMinutes(filterStart, bufferBuffer),
-    end: addMinutes(filterEnd, bufferBuffer),
-  };
-
-  const available = [],
-    potential = [],
-    offDuty = [];
-
-  dayAvailability.forEach((p) => {
-    if (p.isOff) {
-      offDuty.push(p);
-      return;
-    }
-
-    const isFree = p.free.some(
-      (f) =>
-        areIntervalsOverlapping(f, reqInterval) &&
-        f.start <= reqInterval.start &&
-        f.end >= reqInterval.end,
-    );
-    if (isFree) {
-      available.push(p);
-      return;
-    }
-
-    const overlapping = p.busyRaw.filter((b) =>
-      areIntervalsOverlapping(b, reqIntervalWithBuffer),
-    );
-    if (overlapping.length === 0) {
-      available.push(p);
-      return;
-    }
-
-    let allFlex = true;
-    const flexContexts = [];
-    for (const busy of overlapping) {
-      const settings = caseSettings[busy.caseName] || {
-        early: 0,
-        late: 0,
-        isFixed: false,
-      };
-      if (settings.isFixed) {
-        allFlex = false;
-        break;
-      }
-      const canMoveEarly =
-        busy.end.getTime() - settings.early * 60000 <=
-        reqIntervalWithBuffer.start.getTime();
-      const canMoveLate =
-        busy.start.getTime() + settings.late * 60000 >=
-        reqIntervalWithBuffer.end.getTime();
-      if (canMoveEarly || canMoveLate) {
-        flexContexts.push({
-          caseName: busy.caseName,
-          early: settings.early,
-          late: settings.late,
-          canMoveEarly,
-          canMoveLate,
-        });
-      } else {
-        allFlex = false;
-        break;
-      }
-    }
-    if (allFlex && overlapping.length > 0)
-      potential.push({ ...p, flexContexts });
-  });
-
-  return { available, potential, offDuty };
-}
-
 function App() {
   // Multi-org state
   const [orgs, setOrgs] = useState([]);
@@ -604,6 +576,19 @@ function App() {
   const [isHydrated, setIsHydrated] = useState(false);
   const [isDraggingOrgFile, setIsDraggingOrgFile] = useState(false);
   const orgFileDragDepth = useRef(0);
+  const [isAgentOpen, setIsAgentOpen] = useState(false);
+  const [agentInput, setAgentInput] = useState("");
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentMessages, setAgentMessages] = useState([
+    {
+      id: "agent-welcome",
+      role: "assistant",
+      content:
+        "可以直接問我找人問題，例如：\n- 4/2、4/5 13:00~14:00 有 30 分鐘空檔的有誰\n- 本月每週三、四有 2 小時空閒的人有誰\n- 王小明 4/6、4/9、4/20、4/30 有沒有空",
+      copyText:
+        "可以直接問我找人問題，例如：\n- 4/2、4/5 13:00~14:00 有 30 分鐘空檔的有誰\n- 本月每週三、四有 2 小時空閒的人有誰\n- 王小明 4/6、4/9、4/20、4/30 有沒有空",
+    },
+  ]);
 
   // Derived: step
   const step = orgs.length === 0 || showOrgManager ? "upload" : "dashboard";
@@ -650,6 +635,247 @@ function App() {
     if (selectedOrgIds.size === 0) return allScheduleData;
     return allScheduleData.filter((record) => selectedOrgIds.has(record.__orgId));
   }, [allScheduleData, selectedOrgIds]);
+
+  const activeOrgNames = useMemo(() => {
+    if (selectedOrgIds.size === 0) return orgs.map((org) => org.name);
+    return orgs
+      .filter((org) => selectedOrgIds.has(org.id))
+      .map((org) => org.name);
+  }, [orgs, selectedOrgIds]);
+
+  const agentContext = useMemo(
+    () => ({
+      today: format(new Date(), "yyyy-MM-dd"),
+      timezone:
+        Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Taipei",
+      dateRange: dataDateRange,
+      orgNames: activeOrgNames,
+      scopeSummary:
+        selectedOrgIds.size === 0
+          ? "全部已載入機構"
+          : `目前僅查詢：${activeOrgNames.join("、")}`,
+      supportedIntents: SUPPORTED_AGENT_INTENTS,
+    }),
+    [activeOrgNames, dataDateRange, selectedOrgIds.size],
+  );
+
+  const appendAgentMessage = (message) => {
+    setAgentMessages((prev) => [
+      ...prev,
+      {
+        id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        ...message,
+      },
+    ]);
+  };
+
+  const updateAgentMessage = (messageId, patch) => {
+    setAgentMessages((prev) =>
+      prev.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              ...(typeof patch === "function" ? patch(message) : patch),
+            }
+          : message,
+      ),
+    );
+  };
+
+  const streamAgentMessageText = async (messageId, text, copyText = text) => {
+    updateAgentMessage(messageId, {
+      content: "",
+      copyText: "",
+      streaming: true,
+    });
+
+    for (const chunk of chunkAgentText(text)) {
+      updateAgentMessage(messageId, (message) => ({
+        content: `${message.content || ""}${chunk}`,
+      }));
+      await sleep(AGENT_STREAM_CHUNK_DELAY);
+    }
+
+    updateAgentMessage(messageId, {
+      content: text,
+      copyText: copyText || text,
+      streaming: false,
+    });
+  };
+
+  const streamAgentError = async (messageId, error) => {
+    const text =
+      error.message === "Missing OPENAI_API_KEY"
+        ? "AI API 尚未設定 `OPENAI_API_KEY`，請先在專案根目錄建立 `.env.local`。"
+        : `查詢失敗：${error.message}`;
+    const copyText =
+      error.message === "Missing OPENAI_API_KEY"
+        ? "AI API 尚未設定 OPENAI_API_KEY，請先在專案根目錄建立 .env.local。"
+        : `查詢失敗：${error.message}`;
+
+    await streamAgentMessageText(messageId, text, copyText);
+  };
+
+  const fetchAgentQueryFallback = async (message) => {
+    const response = await fetch("/api/agent-query", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message,
+        context: agentContext,
+      }),
+    });
+
+    const parsed = await response.json();
+
+    if (!response.ok || parsed.status === "error") {
+      throw new Error(parsed.error || parsed.text || "AI 查詢失敗");
+    }
+
+    return parsed;
+  };
+
+  const handleAgentSubmit = async (event) => {
+    event.preventDefault();
+
+    const message = agentInput.trim();
+    if (!message || agentLoading) return;
+
+    appendAgentMessage({
+      role: "user",
+      content: message,
+    });
+    setAgentInput("");
+
+    if (activeStaffData.length === 0 || activeScheduleData.length === 0) {
+      appendAgentMessage({
+        role: "assistant",
+        content: "目前還沒有可查詢的班表資料，請先上傳機構班表。",
+        copyText: "目前還沒有可查詢的班表資料，請先上傳機構班表。",
+      });
+      return;
+    }
+
+    const assistantMessageId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setAgentMessages((prev) => [
+      ...prev,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "正在理解你的問題...",
+        copyText: "",
+        streaming: true,
+      },
+    ]);
+
+    setAgentLoading(true);
+
+    try {
+      let parsedQuery = null;
+
+      try {
+        const response = await fetch("/api/agent-query/stream", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            message,
+            context: agentContext,
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error("AI 串流連線失敗");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          sseBuffer += decoder.decode(value, { stream: true });
+
+          const { events, remainder } = parseSseEventBlocks(sseBuffer);
+          sseBuffer = remainder;
+
+          events.forEach((eventBlock) => {
+            const payload = JSON.parse(eventBlock.data);
+
+            if (eventBlock.event === "status") {
+              updateAgentMessage(assistantMessageId, {
+                content: payload.message || "正在處理中...",
+                copyText: "",
+                streaming: true,
+              });
+              return;
+            }
+
+            if (eventBlock.event === "parsed") {
+              parsedQuery = payload.parsed;
+              updateAgentMessage(assistantMessageId, {
+                content: "已理解問題，正在比對本地排班資料...",
+                copyText: "",
+                streaming: true,
+              });
+              return;
+            }
+
+            if (eventBlock.event === "error") {
+              throw new Error(payload.error || "AI 查詢失敗");
+            }
+          });
+        }
+      } catch (streamError) {
+        updateAgentMessage(assistantMessageId, {
+          content: "目前改用一般模式處理，正在比對本地排班資料...",
+          copyText: "",
+          streaming: true,
+        });
+        parsedQuery = await fetchAgentQueryFallback(message);
+      }
+
+      if (!parsedQuery) {
+        throw new Error("AI 沒有回傳有效查詢結果");
+      }
+
+      if (parsedQuery.status === "error") {
+        throw new Error(parsedQuery.error || parsedQuery.text || "AI 查詢失敗");
+      }
+
+      if (parsedQuery.status === "needs_clarification") {
+        await streamAgentMessageText(
+          assistantMessageId,
+          parsedQuery.clarification || "我還需要更多資訊才能完成這個查詢。",
+          parsedQuery.clarification || "我還需要更多資訊才能完成這個查詢。",
+        );
+        return;
+      }
+
+      const executed = executeAgentQuery({
+        parsedQuery,
+        scheduleData: activeScheduleData,
+        staffData: activeStaffData,
+        bufferBuffer,
+        caseSettings,
+      });
+
+      await streamAgentMessageText(
+        assistantMessageId,
+        executed.text || "查詢完成。",
+        executed.copyText || executed.text || "查詢完成。",
+      );
+    } catch (error) {
+      await streamAgentError(assistantMessageId, error);
+    } finally {
+      setAgentLoading(false);
+    }
+  };
 
   const toggleOrg = (orgId) => {
     setSelectedOrgIds((prev) => {
@@ -2158,6 +2384,14 @@ function App() {
               <Button
                 variant="outline"
                 className="h-10 rounded-xl border-white/10 bg-white/5 text-white hover:bg-white/10 font-bold"
+                onClick={() => setIsAgentOpen(true)}
+              >
+                <Sparkles className="w-4 h-4 mr-2" />
+                AI 找人
+              </Button>
+              <Button
+                variant="outline"
+                className="h-10 rounded-xl border-white/10 bg-white/5 text-white hover:bg-white/10 font-bold"
                 onClick={() => setShowOrgManager(true)}
               >
                 管理機構
@@ -3072,6 +3306,21 @@ function App() {
           </div>
         )}
       </main>
+
+      <AgentSidebar
+        open={isAgentOpen}
+        onClose={() => setIsAgentOpen(false)}
+        messages={agentMessages}
+        inputValue={agentInput}
+        onInputChange={setAgentInput}
+        onSubmit={handleAgentSubmit}
+        loading={agentLoading}
+        examplePrompts={AGENT_EXAMPLE_PROMPTS}
+        onExampleClick={(prompt) => {
+          setIsAgentOpen(true);
+          setAgentInput(prompt);
+        }}
+      />
     </div>
   );
 }
