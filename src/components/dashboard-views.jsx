@@ -360,14 +360,15 @@ export const StatsView = ({
             <h3 className="text-base font-bold text-brand-slate">加班費時數</h3>
             <button
               onClick={() => {
-                const headers = ["姓名", "轉場", "1.34", "1.67", "2.67", "1", "2"];
+                const headers = ["姓名", "實際工時", "轉場", "1.34", "1.67", "2.67", "1", "2"];
                 const rows = sorted.map((item) => {
+                  const actualHours = item.normal_1_8;
                   const r134 = +(item.normal_8_10 + item.rest_lte2 + item.nat_8_10).toFixed(2);
                   const r167 = +(item.normal_gt10 + item.rest_lte8 + item.nat_gt10).toFixed(2);
                   const r267 = item.rest_gt8;
                   const r1x = (item.holDayCount + item.natDayCount) * 8;
                   const r2x = item.hol_gt8;
-                  return [item.staff.name, item.transitHoursTotal || "-", r134 || "-", r167 || "-", r267 || "-", r1x || "-", r2x || "-"].join("\t");
+                  return [item.staff.name, actualHours || "-", item.transitHoursTotal || "-", r134 || "-", r167 || "-", r267 || "-", r1x || "-", r2x || "-"].join("\t");
                 });
                 navigator.clipboard.writeText([headers.join("\t"), ...rows].join("\n"));
                 setCopiedOT(true);
@@ -384,10 +385,11 @@ export const StatsView = ({
             </button>
           </div>
           <div className="overflow-x-auto -mx-5 px-5">
-            <table className="w-full text-xs border-collapse min-w-[500px]">
+            <table className="w-full text-xs border-collapse min-w-[620px]">
               <thead>
                 <tr>
                   <th className="sticky left-0 z-10 bg-white border border-slate-200 px-2 py-1.5 text-left font-bold text-slate-600">姓名</th>
+                  <th className="bg-violet-50 border border-slate-200 px-2 py-1.5 text-center font-bold text-violet-600">實際工時</th>
                   <th className="bg-violet-50 border border-slate-200 px-2 py-1.5 text-center font-bold text-violet-600">轉場</th>
                   <th className="bg-violet-50 border border-slate-200 px-2 py-1.5 text-center font-bold text-violet-600">1.34</th>
                   <th className="bg-violet-50 border border-slate-200 px-2 py-1.5 text-center font-bold text-violet-600">1.67</th>
@@ -399,6 +401,7 @@ export const StatsView = ({
               <tbody>
                 {sorted.map((item) => {
                   const formatValue = (value) => (value > 0 ? value : "-");
+                  const actualHours = item.normal_1_8;
                   const r134 = +(item.normal_8_10 + item.rest_lte2 + item.nat_8_10).toFixed(2);
                   const r167 = +(item.normal_gt10 + item.rest_lte8 + item.nat_gt10).toFixed(2);
                   const r267 = item.rest_gt8;
@@ -407,6 +410,7 @@ export const StatsView = ({
                   return (
                     <tr key={item.staff.name} className="hover:bg-slate-50">
                       <td className="sticky left-0 z-10 bg-white border border-slate-200 px-2 py-1.5 font-medium text-slate-700 whitespace-nowrap">{item.staff.name}</td>
+                      <td className="border border-slate-200 px-2 py-1.5 text-center text-slate-500">{formatValue(actualHours)}</td>
                       <td className="border border-slate-200 px-2 py-1.5 text-center text-slate-500">{formatValue(item.transitHoursTotal)}</td>
                       <td className="border border-slate-200 px-2 py-1.5 text-center text-slate-500">{formatValue(r134)}</td>
                       <td className="border border-slate-200 px-2 py-1.5 text-center text-slate-500">{formatValue(r167)}</td>

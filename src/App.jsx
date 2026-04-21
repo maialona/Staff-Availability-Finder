@@ -602,6 +602,8 @@ function App() {
   const [showOrgManager, setShowOrgManager] = useState(false);
   const [selectedOrgIds, setSelectedOrgIds] = useState(new Set());
   const [isHydrated, setIsHydrated] = useState(false);
+  const [isDraggingOrgFile, setIsDraggingOrgFile] = useState(false);
+  const orgFileDragDepth = useRef(0);
 
   // Derived: step
   const step = orgs.length === 0 || showOrgManager ? "upload" : "dashboard";
@@ -915,8 +917,7 @@ function App() {
   const START_OF_DAY = 6; // 06:00
   const END_OF_DAY = 22; // 22:00
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
+  const processOrgFile = (file) => {
     if (!file) return;
 
     setLoading(true);
@@ -965,6 +966,46 @@ function App() {
       }
     };
     reader.readAsArrayBuffer(file);
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    processOrgFile(file);
+    e.target.value = "";
+  };
+
+  const handleOrgFileDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    orgFileDragDepth.current += 1;
+    setIsDraggingOrgFile(true);
+  };
+
+  const handleOrgFileDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDraggingOrgFile) {
+      setIsDraggingOrgFile(true);
+    }
+  };
+
+  const handleOrgFileDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    orgFileDragDepth.current = Math.max(0, orgFileDragDepth.current - 1);
+    if (orgFileDragDepth.current === 0) {
+      setIsDraggingOrgFile(false);
+    }
+  };
+
+  const handleOrgFileDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    orgFileDragDepth.current = 0;
+    setIsDraggingOrgFile(false);
+
+    const file = e.dataTransfer?.files?.[0];
+    processOrgFile(file);
   };
 
   const handleCaseScheduleUpload = (e) => {
@@ -1958,15 +1999,45 @@ function App() {
               {/* Drop zone */}
               <label
                 htmlFor="file-upload"
-                className="anim-fade-up anim-delay-3 group relative flex flex-col items-center justify-center w-full h-64 border-2 border-dashed border-slate-300 rounded-3xl cursor-pointer bg-white hover:bg-brand-coral/[0.02] hover:border-brand-coral shadow-sm transition-all duration-300"
+                onDragEnter={handleOrgFileDragEnter}
+                onDragOver={handleOrgFileDragOver}
+                onDragLeave={handleOrgFileDragLeave}
+                onDrop={handleOrgFileDrop}
+                className={cn(
+                  "anim-fade-up anim-delay-3 group relative flex flex-col items-center justify-center w-full h-64 border-2 border-dashed rounded-3xl cursor-pointer bg-white shadow-sm transition-all duration-300",
+                  isDraggingOrgFile
+                    ? "border-brand-coral bg-brand-coral/[0.04] scale-[1.01]"
+                    : "border-slate-300 hover:bg-brand-coral/[0.02] hover:border-brand-coral",
+                )}
               >
                 <div className="flex flex-col items-center gap-4">
-                  <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center group-hover:bg-brand-coral/10 group-hover:scale-110 transition-all duration-300">
-                    <Upload className="w-8 h-8 text-slate-400 group-hover:text-brand-coral transition-colors" />
+                  <div
+                    className={cn(
+                      "w-16 h-16 rounded-2xl flex items-center justify-center transition-all duration-300",
+                      isDraggingOrgFile
+                        ? "bg-brand-coral/10 scale-110"
+                        : "bg-slate-100 group-hover:bg-brand-coral/10 group-hover:scale-110",
+                    )}
+                  >
+                    <Upload
+                      className={cn(
+                        "w-8 h-8 transition-colors",
+                        isDraggingOrgFile
+                          ? "text-brand-coral"
+                          : "text-slate-400 group-hover:text-brand-coral",
+                      )}
+                    />
                   </div>
                   <div className="text-center">
-                    <p className="text-base font-semibold text-slate-600 group-hover:text-brand-slate transition-colors">
-                      點擊上傳或拖曳檔案至此
+                    <p
+                      className={cn(
+                        "text-base font-semibold transition-colors",
+                        isDraggingOrgFile
+                          ? "text-brand-slate"
+                          : "text-slate-600 group-hover:text-brand-slate",
+                      )}
+                    >
+                      {isDraggingOrgFile ? "放開以上傳班表" : "點擊上傳或拖曳檔案至此"}
                     </p>
                     <p className="text-sm text-slate-400 mt-1">
                       支援 .xlsx, .xls
