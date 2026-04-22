@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const loadEnvFile = (filePath) => {
   if (!fs.existsSync(filePath)) return;
@@ -34,6 +35,24 @@ loadEnvFile(path.resolve(process.cwd(), ".env.local"));
 
 const PORT = Number(process.env.PORT || process.env.AGENT_API_PORT || 8787);
 const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, "..");
+const DIST_DIR = path.resolve(PROJECT_ROOT, "dist");
+const INDEX_FILE = path.join(DIST_DIR, "index.html");
+const STATIC_FILE_TYPES = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
 
 const QUERY_OBJECT_SCHEMA = {
   type: "object",
@@ -343,6 +362,51 @@ const sendSseHeaders = (res) => {
   });
 };
 
+const sendStaticFile = (res, filePath) => {
+  const ext = path.extname(filePath).toLowerCase();
+  const contentType = STATIC_FILE_TYPES[ext] || "application/octet-stream";
+
+  try {
+    const stat = fs.statSync(filePath);
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      "Content-Length": stat.size,
+    });
+    fs.createReadStream(filePath).pipe(res);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const tryServeFrontendAsset = (req, res) => {
+  if (req.method !== "GET" && req.method !== "HEAD") return false;
+  if (!fs.existsSync(DIST_DIR)) return false;
+
+  const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const pathname = decodeURIComponent(requestUrl.pathname);
+
+  if (pathname.startsWith("/api/")) return false;
+
+  const relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const requestedFilePath = path.resolve(DIST_DIR, relativePath);
+
+  if (!requestedFilePath.startsWith(DIST_DIR)) {
+    sendJson(res, 403, { status: "error", error: "Forbidden" });
+    return true;
+  }
+
+  if (fs.existsSync(requestedFilePath) && fs.statSync(requestedFilePath).isFile()) {
+    return sendStaticFile(res, requestedFilePath);
+  }
+
+  if (fs.existsSync(INDEX_FILE)) {
+    return sendStaticFile(res, INDEX_FILE);
+  }
+
+  return false;
+};
+
 const writeSseEvent = (res, event, payload) => {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -567,6 +631,10 @@ const server = http.createServer(async (req, res) => {
     } finally {
       res.end();
     }
+    return;
+  }
+
+  if (tryServeFrontendAsset(req, res)) {
     return;
   }
 

@@ -7,9 +7,6 @@ dist-ssr
 .env.local
 README.md
 2026-02_班表.xls
-public
-src
-scripts
 .vscode
 .idea
 *.log
