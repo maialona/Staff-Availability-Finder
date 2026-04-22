@@ -698,7 +698,7 @@ function App() {
 
   // Derived: merged date range
   const dataDateRange = useMemo(() => {
-    const ranges = orgs.map((o) => o.dateRange).filter(Boolean);
+    const ranges = [...new Set(orgs.map((o) => o.dateRange).filter(Boolean))];
     return ranges.join("  ·  ");
   }, [orgs]);
 
@@ -983,14 +983,21 @@ function App() {
 
   const toggleOrg = (orgId) => {
     setSelectedOrgIds((prev) => {
+      if (prev.size === 0) {
+        return new Set(orgs.map((org) => org.id).filter((id) => id !== orgId));
+      }
+
       const next = new Set(prev);
+
       if (next.has(orgId)) {
         next.delete(orgId);
       } else {
         next.add(orgId);
       }
-      // If all selected or none selected, reset to "all"
-      if (next.size === orgs.length) return new Set();
+
+      // Keep the existing "empty set means all orgs" internal model.
+      // When users clear the last active org or re-enable every org, fall back to all.
+      if (next.size === 0 || next.size === orgs.length) return new Set();
       return next;
     });
   };
