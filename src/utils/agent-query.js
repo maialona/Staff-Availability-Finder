@@ -251,6 +251,26 @@ const buildAnswerPayload = (title, lines) => {
   return { status: "ok", text, copyText: text };
 };
 
+const isMatchedStatus = (status) => status === "available" || status === "potential";
+const isOffDutyStatus = (status) => status === "offDuty";
+
+const collectResultStaffMap = (perDate = []) => {
+  const resultStaffMap = new Map();
+
+  perDate.forEach(({ result }) => {
+    ["available", "potential", "offDuty"].forEach((bucket) => {
+      (result?.[bucket] || []).forEach((person) => {
+        const key = getStaffKey(person.staff);
+        if (!resultStaffMap.has(key)) {
+          resultStaffMap.set(key, person.staff);
+        }
+      });
+    });
+  });
+
+  return resultStaffMap;
+};
+
 const runSingleDateFilter = ({
   date,
   scheduleData,
@@ -340,7 +360,18 @@ const executeFindStaffForDates = ({
     }),
   }));
 
-  const candidates = scopedStaffData
+  const dateMatchMode = query.dateMatchMode === "any" ? "any" : "all";
+  const includeOffDuty = Boolean(query.includeOffDuty);
+  const resultStaffMap = collectResultStaffMap(perDate);
+  const candidateStaffList =
+    requestedNames.length > 0
+      ? scopedStaffData
+      : [...new Map([
+          ...scopedStaffData.map((staff) => [getStaffKey(staff), staff]),
+          ...resultStaffMap.entries(),
+        ]).values()];
+
+  const evaluatedCandidates = candidateStaffList
     .map((staff) => {
       const key = getStaffKey(staff);
       const statuses = perDate.map(({ date, result }) => {
@@ -352,46 +383,111 @@ const executeFindStaffForDates = ({
         };
       });
 
-      const matchesEveryDate = statuses.every(
-        ({ status }) => status === "available" || status === "potential",
-      );
+      const matchedStatuses = statuses.filter(({ status }) => isMatchedStatus(status));
+      const offDutyStatuses = statuses.filter(({ status }) => isOffDutyStatus(status));
+      const matchesEveryDate = statuses.every(({ status }) => isMatchedStatus(status));
+      const matchesAnyDate = matchedStatuses.length > 0;
+      const offDutyEveryDate = statuses.every(({ status }) => isOffDutyStatus(status));
+      const offDutyAnyDate = offDutyStatuses.length > 0;
 
-      if (!matchesEveryDate) return null;
+      const matchesAvailability =
+        dateMatchMode === "all" ? matchesEveryDate : matchesAnyDate;
+      const matchesOffDuty =
+        dateMatchMode === "all" ? offDutyEveryDate : offDutyAnyDate;
 
-      const hasPotential = statuses.some(({ status }) => status === "potential");
-      const reasons = statuses.map(({ date, entry }) =>
-        buildResultReason({
-          date,
-          entry,
-          timeWindowStart: query.timeWindowStart,
-          timeWindowEnd: query.timeWindowEnd,
-          requiredMinutes: query.requiredMinutes,
-        }),
-      );
+      if (!matchesAvailability && !(includeOffDuty && matchesOffDuty)) return null;
+
+      const relevantAvailabilityStatuses = dateMatchMode === "any" ? matchedStatuses : statuses;
+      const relevantOffDutyStatuses = dateMatchMode === "any" ? offDutyStatuses : statuses;
 
       return {
         staff,
-        hasPotential,
-        reasons,
+        availability: matchesAvailability
+          ? {
+              hasPotential: relevantAvailabilityStatuses.some(
+                ({ status }) => status === "potential",
+              ),
+              reasons: relevantAvailabilityStatuses.map(({ date, entry }) =>
+                buildResultReason({
+                  date,
+                  entry,
+                  timeWindowStart: query.timeWindowStart,
+                  timeWindowEnd: query.timeWindowEnd,
+                  requiredMinutes: query.requiredMinutes,
+                }),
+              ),
+            }
+          : null,
+        offDuty: includeOffDuty && matchesOffDuty
+          ? {
+              reasons: relevantOffDutyStatuses.map(({ date, entry }) =>
+                buildResultReason({
+                  date,
+                  entry,
+                  timeWindowStart: query.timeWindowStart,
+                  timeWindowEnd: query.timeWindowEnd,
+                  requiredMinutes: query.requiredMinutes,
+                }),
+              ),
+            }
+          : null,
       };
     })
     .filter(Boolean);
 
-  if (candidates.length === 0) {
+  const availabilityCandidates = evaluatedCandidates.filter(
+    (candidate) => candidate.availability,
+  );
+  const offDutyCandidates = evaluatedCandidates.filter((candidate) => candidate.offDuty);
+
+  if (availabilityCandidates.length === 0 && offDutyCandidates.length === 0) {
     return {
       status: "ok",
-      text: `沒有任何人同時符合 ${dates.join("、")} 的條件。`,
-      copyText: `沒有任何人同時符合 ${dates.join("、")} 的條件。`,
+      text:
+        dateMatchMode === "any"
+          ? `沒有任何人在 ${dates.join("、")} 之中任一天符合條件。`
+          : `沒有任何人同時符合 ${dates.join("、")} 的條件。`,
+      copyText:
+        dateMatchMode === "any"
+          ? `沒有任何人在 ${dates.join("、")} 之中任一天符合條件。`
+          : `沒有任何人同時符合 ${dates.join("、")} 的條件。`,
     };
   }
 
-  const lines = [
-    `共找到 ${candidates.length} 位人員符合 ${dates.length} 天條件。`,
-    ...candidates.flatMap((candidate) => {
-      const label = `${candidate.staff.name}${candidate.staff.org ? `（${candidate.staff.org}）` : ""}`;
-      return [``, `${label}${candidate.hasPotential ? "｜含可彈性調整" : ""}`, ...candidate.reasons];
-    }),
-  ];
+  const lines = [];
+
+  if (availabilityCandidates.length > 0) {
+    lines.push(
+      dateMatchMode === "any"
+        ? `可出勤人員：共 ${availabilityCandidates.length} 位在 ${dates.join("、")} 之中至少一天符合條件。`
+        : `可出勤人員：共 ${availabilityCandidates.length} 位符合 ${dates.length} 天條件。`,
+    );
+    lines.push(
+      ...availabilityCandidates.flatMap((candidate) => {
+        const label = `${candidate.staff.name}${candidate.staff.org ? `（${candidate.staff.org}）` : ""}`;
+        return [
+          ``,
+          `${label}${candidate.availability.hasPotential ? "｜含可彈性調整" : ""}`,
+          ...candidate.availability.reasons,
+        ];
+      }),
+    );
+  }
+
+  if (offDutyCandidates.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push(
+      dateMatchMode === "any"
+        ? `休假 / 例假人員：共 ${offDutyCandidates.length} 位在 ${dates.join("、")} 之中至少一天為休假。`
+        : `休假 / 例假人員：共 ${offDutyCandidates.length} 位在 ${dates.length} 天皆為休假。`,
+    );
+    lines.push(
+      ...offDutyCandidates.flatMap((candidate) => {
+        const label = `${candidate.staff.name}${candidate.staff.org ? `（${candidate.staff.org}）` : ""}`;
+        return ["", label, ...candidate.offDuty.reasons];
+      }),
+    );
+  }
 
   return buildAnswerPayload("查詢結果", lines);
 };

@@ -90,14 +90,31 @@ const createAdvancedWeekRule = () => ({
   includePotential: true,
 });
 
-const AGENT_EXAMPLE_PROMPTS = [
-  "4/2、4/5 13:00~14:00 有 30 分鐘空檔的有誰",
-  "本月每週三、四有 2 小時空閒的人有誰",
-  "王小明 4/6、4/9、4/20、4/30 有沒有空",
-];
+const AGENT_WELCOME_MESSAGE = {
+  id: "agent-welcome",
+  role: "assistant",
+  content:
+    "可以直接問我找人問題，例如：\n- 4/2、4/5 13:00~14:00 有 30 分鐘空檔的有誰\n- 本月每週三、四有 2 小時空閒的人有誰\n- 王小明 4/6、4/9、4/20、4/30 有沒有空",
+  copyText:
+    "可以直接問我找人問題，例如：\n- 4/2、4/5 13:00~14:00 有 30 分鐘空檔的有誰\n- 本月每週三、四有 2 小時空閒的人有誰\n- 王小明 4/6、4/9、4/20、4/30 有沒有空",
+};
 
 const AGENT_STREAM_CHUNK_SIZE = 8;
-const AGENT_STREAM_CHUNK_DELAY = 18;
+const AGENT_STREAM_CHUNK_DELAY = 42;
+const AGENT_QUERY_KEYS = [
+  "staffName",
+  "staffNames",
+  "dates",
+  "weekdayValues",
+  "dateRangeStart",
+  "dateRangeEnd",
+  "timeWindowStart",
+  "timeWindowEnd",
+  "requiredMinutes",
+  "dateMatchMode",
+  "includeOffDuty",
+  "includePotential",
+];
 
 const normalizeCrossOrgStaffName = (name = "") =>
   String(name)
@@ -167,6 +184,76 @@ const parseSseEventBlocks = (buffer) => {
     events,
     remainder,
   };
+};
+
+const normalizeAgentQuery = (query = {}) =>
+  AGENT_QUERY_KEYS.reduce((acc, key) => {
+    acc[key] = key in (query || {}) ? query[key] : null;
+    return acc;
+  }, {});
+
+const buildAgentConversationHistory = (messages, currentMessage) => {
+  const history = messages
+    .filter((message) => message.id !== AGENT_WELCOME_MESSAGE.id)
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter((message) => String(message.content || "").trim())
+    .slice(-6)
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content || "").trim(),
+    }));
+
+  if (currentMessage) {
+    history.push({
+      role: "user",
+      content: currentMessage,
+    });
+  }
+
+  return history;
+};
+
+const buildPendingAgentState = (parsedQuery, sourceMessage) => {
+  if (parsedQuery?.status !== "needs_clarification") return null;
+
+  const intent =
+    parsedQuery.pendingIntent ||
+    (parsedQuery.intent && parsedQuery.intent !== "none" ? parsedQuery.intent : null);
+
+  if (!intent) return null;
+
+  return {
+    intent,
+    query: normalizeAgentQuery(parsedQuery.partialQuery || parsedQuery.query || {}),
+    missingFields: Array.isArray(parsedQuery.missingFields)
+      ? parsedQuery.missingFields
+      : [],
+    clarification: parsedQuery.clarification || "",
+    sourceMessage: sourceMessage || "",
+  };
+};
+
+const shouldTreatAsNewAgentQuery = (message, pendingAgentQuery) => {
+  if (!pendingAgentQuery) return false;
+
+  const text = String(message || "").trim();
+  if (!text) return false;
+
+  const hasDate = /(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\/\d{1,2})/.test(text);
+  const hasTime =
+    /\d{1,2}:\d{2}(?:\s*[~～\-－到至]\s*\d{1,2}:\d{2})?/.test(text);
+  const hasStaffKeyword =
+    /[\u4e00-\u9fff]{2,4}(?=\s*(?:\d{1,2}\/\d{1,2}|\d{4}-\d{1,2}-\d{1,2}|有空|空檔|空閒|班表))/.test(
+      text,
+    );
+  const startsLikeNewQuery =
+    /^(列出|查詢|幫我|找|誰|有哪些|請列出|查看|本月|每週|今天|明天)/.test(text);
+
+  return (
+    (hasDate && hasTime) ||
+    (hasDate && hasStaffKeyword) ||
+    (startsLikeNewQuery && (hasDate || hasTime || hasStaffKeyword))
+  );
 };
 
 const clipInterval = (interval, rangeStart, rangeEnd) => {
@@ -579,16 +666,9 @@ function App() {
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const [agentInput, setAgentInput] = useState("");
   const [agentLoading, setAgentLoading] = useState(false);
-  const [agentMessages, setAgentMessages] = useState([
-    {
-      id: "agent-welcome",
-      role: "assistant",
-      content:
-        "可以直接問我找人問題，例如：\n- 4/2、4/5 13:00~14:00 有 30 分鐘空檔的有誰\n- 本月每週三、四有 2 小時空閒的人有誰\n- 王小明 4/6、4/9、4/20、4/30 有沒有空",
-      copyText:
-        "可以直接問我找人問題，例如：\n- 4/2、4/5 13:00~14:00 有 30 分鐘空檔的有誰\n- 本月每週三、四有 2 小時空閒的人有誰\n- 王小明 4/6、4/9、4/20、4/30 有沒有空",
-    },
-  ]);
+  const [agentMessages, setAgentMessages] = useState([AGENT_WELCOME_MESSAGE]);
+  const [agentSidebarWidth, setAgentSidebarWidth] = useState(440);
+  const [pendingAgentQuery, setPendingAgentQuery] = useState(null);
 
   // Derived: step
   const step = orgs.length === 0 || showOrgManager ? "upload" : "dashboard";
@@ -669,6 +749,11 @@ function App() {
     ]);
   };
 
+  const clearAgentMessages = () => {
+    setAgentMessages([AGENT_WELCOME_MESSAGE]);
+    setPendingAgentQuery(null);
+  };
+
   const updateAgentMessage = (messageId, patch) => {
     setAgentMessages((prev) =>
       prev.map((message) =>
@@ -716,7 +801,16 @@ function App() {
     await streamAgentMessageText(messageId, text, copyText);
   };
 
-  const fetchAgentQueryFallback = async (message) => {
+  const buildAgentRequestContext = (message, pendingState) => ({
+    ...agentContext,
+    conversationHistory: buildAgentConversationHistory(agentMessages, message),
+    agentMode: pendingState ? "fill_missing_fields" : "new_query",
+    pendingIntent: pendingState?.intent || null,
+    pendingQuery: pendingState?.query || null,
+    missingFields: pendingState?.missingFields || null,
+  });
+
+  const fetchAgentQueryFallback = async (message, pendingState) => {
     const response = await fetch("/api/agent-query", {
       method: "POST",
       headers: {
@@ -724,7 +818,7 @@ function App() {
       },
       body: JSON.stringify({
         message,
-        context: agentContext,
+        context: buildAgentRequestContext(message, pendingState),
       }),
     });
 
@@ -742,6 +836,8 @@ function App() {
 
     const message = agentInput.trim();
     if (!message || agentLoading) return;
+    const treatAsNewQuery = shouldTreatAsNewAgentQuery(message, pendingAgentQuery);
+    const activePendingQuery = treatAsNewQuery ? null : pendingAgentQuery;
 
     appendAgentMessage({
       role: "user",
@@ -759,6 +855,11 @@ function App() {
     }
 
     const assistantMessageId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    if (treatAsNewQuery) {
+      setPendingAgentQuery(null);
+    }
+
     setAgentMessages((prev) => [
       ...prev,
       {
@@ -783,7 +884,7 @@ function App() {
           },
           body: JSON.stringify({
             message,
-            context: agentContext,
+            context: buildAgentRequestContext(message, activePendingQuery),
           }),
         });
 
@@ -837,7 +938,7 @@ function App() {
           copyText: "",
           streaming: true,
         });
-        parsedQuery = await fetchAgentQueryFallback(message);
+        parsedQuery = await fetchAgentQueryFallback(message, activePendingQuery);
       }
 
       if (!parsedQuery) {
@@ -849,6 +950,7 @@ function App() {
       }
 
       if (parsedQuery.status === "needs_clarification") {
+        setPendingAgentQuery(buildPendingAgentState(parsedQuery, message));
         await streamAgentMessageText(
           assistantMessageId,
           parsedQuery.clarification || "我還需要更多資訊才能完成這個查詢。",
@@ -856,6 +958,8 @@ function App() {
         );
         return;
       }
+
+      setPendingAgentQuery(null);
 
       const executed = executeAgentQuery({
         parsedQuery,
@@ -2387,7 +2491,7 @@ function App() {
                 onClick={() => setIsAgentOpen(true)}
               >
                 <Sparkles className="w-4 h-4 mr-2" />
-                AI 找人
+                AI 釣人
               </Button>
               <Button
                 variant="outline"
@@ -3310,16 +3414,14 @@ function App() {
       <AgentSidebar
         open={isAgentOpen}
         onClose={() => setIsAgentOpen(false)}
+        width={agentSidebarWidth}
+        onWidthChange={setAgentSidebarWidth}
+        onClearMessages={clearAgentMessages}
         messages={agentMessages}
         inputValue={agentInput}
         onInputChange={setAgentInput}
         onSubmit={handleAgentSubmit}
         loading={agentLoading}
-        examplePrompts={AGENT_EXAMPLE_PROMPTS}
-        onExampleClick={(prompt) => {
-          setIsAgentOpen(true);
-          setAgentInput(prompt);
-        }}
       />
     </div>
   );
