@@ -24,6 +24,20 @@ const SortBtn = ({ value, label, sortBy, setSortBy, cn }) => (
   </button>
 );
 
+const HourFilterBtn = ({ value, label, hourFilter, setHourFilter, cn }) => (
+  <button
+    onClick={() => setHourFilter(value)}
+    className={cn(
+      "px-3 py-1.5 rounded-lg text-xs font-bold transition-colors",
+      hourFilter === value
+        ? "bg-brand-coral text-white"
+        : "bg-slate-100 text-slate-500 hover:bg-slate-200",
+    )}
+  >
+    {label}
+  </button>
+);
+
 const STATS_GRID_COLUMNS = 4;
 
 const buildStatsGridRows = (items, columns = STATS_GRID_COLUMNS) => {
@@ -66,6 +80,7 @@ export const StatsView = ({
   const OrgDot = orgDotComponent;
   const [sortBy, setSortBy] = React.useState("sheet");
   const [viewMode, setViewMode] = React.useState("chart");
+  const [hourFilter, setHourFilter] = React.useState("all");
   const [mounted, setMounted] = React.useState(false);
   const [copiedGrid, setCopiedGrid] = React.useState(false);
   const [copiedDetail, setCopiedDetail] = React.useState(false);
@@ -76,7 +91,13 @@ export const StatsView = ({
     return () => cancelAnimationFrame(t);
   }, []);
 
-  const sorted = [...statsData]
+  const filteredStats = statsData.filter((item) => {
+    if (hourFilter === "gt220") return item.totalHours > 220;
+    if (hourFilter === "lt100") return item.totalHours < 100;
+    return true;
+  });
+
+  const sorted = [...filteredStats]
     .sort((a, b) => {
       if (sortBy === "sheet") {
         const orgOrderA = a.staff.orgIdx ?? 0;
@@ -100,7 +121,7 @@ export const StatsView = ({
   const scheduledCount = statsData.filter((staffStat) => staffStat.sessions > 0).length;
   const avgHours =
     scheduledCount > 0 ? +(totalHours / scheduledCount).toFixed(1) : 0;
-  const maxMinutes = statsData[0]?.totalMinutes || 1;
+  const maxMinutes = sorted[0]?.totalMinutes || 1;
   const statsGridRows = buildStatsGridRows(sorted);
 
   const handleGridCopy = () => {
@@ -193,6 +214,30 @@ export const StatsView = ({
                 cn={cn}
               />
             </div>
+            <div className="flex items-center gap-2 border-r border-slate-200 pr-3">
+              <span className="text-xs text-slate-400 font-medium">時數：</span>
+              <HourFilterBtn
+                value="all"
+                label="全部"
+                hourFilter={hourFilter}
+                setHourFilter={setHourFilter}
+                cn={cn}
+              />
+              <HourFilterBtn
+                value="gt220"
+                label=">220h"
+                hourFilter={hourFilter}
+                setHourFilter={setHourFilter}
+                cn={cn}
+              />
+              <HourFilterBtn
+                value="lt100"
+                label="<100h"
+                hourFilter={hourFilter}
+                setHourFilter={setHourFilter}
+                cn={cn}
+              />
+            </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-400 font-medium">顯示：</span>
               <button
@@ -217,7 +262,7 @@ export const StatsView = ({
                 )}
               >
                 <LayoutGrid className="w-3.5 h-3.5" />
-                表格式排行
+                表格
               </button>
             </div>
         </div>

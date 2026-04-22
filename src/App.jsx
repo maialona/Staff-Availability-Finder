@@ -2517,7 +2517,7 @@ function App() {
         {/* Dashboard Controls */}
         <div className="mb-8 bg-white rounded-3xl border border-slate-100 shadow-sm anim-fade-up anim-delay-1 overflow-hidden">
           {/* Row 1: always-visible controls */}
-          <div className="p-6 flex flex-col md:flex-row md:items-end gap-6">
+          <div className="p-6 flex flex-col md:flex-row md:items-start gap-6">
             <div className="space-y-2 flex-1">
               <Label className="text-brand-slate font-bold flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-brand-coral" />
@@ -2539,7 +2539,7 @@ function App() {
               />
             </div>
 
-            <div className="hidden md:block h-10 w-px bg-slate-100 self-end mb-1" />
+            <div className="hidden md:block h-10 w-px bg-slate-100 self-start mt-8" />
 
             {/* Filter Mode Toggle */}
             <div className="space-y-2">
@@ -2573,17 +2573,11 @@ function App() {
               </div>
             </div>
 
-            <div className="hidden md:block h-10 w-px bg-slate-100 self-end mb-1" />
+            <div className="hidden md:block h-10 w-px bg-slate-100 self-start mt-8" />
 
             {/* Summary panel */}
-            <div className="flex-none bg-brand-lavender/50 p-4 rounded-2xl border border-brand-lavender space-y-3">
+            <div className="flex-none space-y-3">
               <div>
-                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">
-                  當前查看範圍
-                </p>
-                <p className="text-sm font-bold text-brand-slate">
-                  {format(new Date(selectedDate), "yyyy年 MM月 dd日")}
-                </p>
                 {filterMode === "manual" &&
                   (filterStartTime || filterEndTime) && (
                     <button
