@@ -32,7 +32,7 @@ const loadEnvFile = (filePath) => {
 loadEnvFile(path.resolve(process.cwd(), ".env"));
 loadEnvFile(path.resolve(process.cwd(), ".env.local"));
 
-const PORT = Number(process.env.AGENT_API_PORT || 8787);
+const PORT = Number(process.env.PORT || process.env.AGENT_API_PORT || 8787);
 const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
 const QUERY_OBJECT_SCHEMA = {
