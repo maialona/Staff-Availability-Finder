@@ -101,6 +101,7 @@ const AGENT_WELCOME_MESSAGE = {
 
 const AGENT_STREAM_CHUNK_SIZE = 8;
 const AGENT_STREAM_CHUNK_DELAY = 42;
+const AGENT_API_BASE_URL = (import.meta.env.VITE_AGENT_API_BASE_URL || "").replace(/\/$/, "");
 const AGENT_QUERY_KEYS = [
   "staffName",
   "staffNames",
@@ -184,6 +185,30 @@ const parseSseEventBlocks = (buffer) => {
     events,
     remainder,
   };
+};
+
+const buildAgentApiUrl = (path) =>
+  `${AGENT_API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+
+const parseAgentApiResponse = async (response) => {
+  const rawText = await response.text();
+  const contentType = response.headers.get("content-type") || "";
+
+  if (!rawText.trim()) {
+    throw new Error("AI API 回傳空內容，請確認部署時前端是否正確連到後端 API。");
+  }
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `AI API 沒有回傳 JSON（收到 ${contentType || "未知格式"}），請確認 VITE_AGENT_API_BASE_URL 是否正確。`,
+    );
+  }
+
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    throw new Error("AI API 回傳格式異常，無法解析 JSON。");
+  }
 };
 
 const normalizeAgentQuery = (query = {}) =>
@@ -811,7 +836,7 @@ function App() {
   });
 
   const fetchAgentQueryFallback = async (message, pendingState) => {
-    const response = await fetch("/api/agent-query", {
+    const response = await fetch(buildAgentApiUrl("/api/agent-query"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -822,7 +847,7 @@ function App() {
       }),
     });
 
-    const parsed = await response.json();
+    const parsed = await parseAgentApiResponse(response);
 
     if (!response.ok || parsed.status === "error") {
       throw new Error(parsed.error || parsed.text || "AI 查詢失敗");
@@ -877,7 +902,7 @@ function App() {
       let parsedQuery = null;
 
       try {
-        const response = await fetch("/api/agent-query/stream", {
+        const response = await fetch(buildAgentApiUrl("/api/agent-query/stream"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
