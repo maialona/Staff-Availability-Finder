@@ -40,6 +40,7 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DIST_DIR = path.resolve(PROJECT_ROOT, "dist");
 const INDEX_FILE = path.join(DIST_DIR, "index.html");
+
 const STATIC_FILE_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -53,6 +54,12 @@ const STATIC_FILE_TYPES = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
 };
+
+const DAY_PART_WINDOWS = Object.freeze({
+  morning: { start: "08:00", end: "12:00" },
+  afternoon: { start: "12:00", end: "18:00" },
+  evening: { start: "18:00", end: "22:00" },
+});
 
 const QUERY_OBJECT_SCHEMA = {
   type: "object",
@@ -179,7 +186,7 @@ const QUERY_SCHEMA = {
   },
 };
 
-const normalizeQueryShape = (query = {}) =>
+export const normalizeQueryShape = (query = {}) =>
   QUERY_KEYS.reduce((acc, key) => {
     acc[key] = key in (query || {}) ? query[key] : EMPTY_QUERY[key];
     return acc;
@@ -203,6 +210,682 @@ const mergePendingQuery = (baseQuery = {}, incomingQuery = {}) => {
   }, {});
 };
 
+const toHalfWidthDigits = (value = "") =>
+  String(value).replace(/[０-９]/g, (char) =>
+    String.fromCharCode(char.charCodeAt(0) - 0xfee0),
+  );
+
+const normalizeMessageText = (value = "") =>
+  toHalfWidthDigits(value)
+    .replace(/[，、]/g, " ")
+    .replace(/[（]/g, "(")
+    .replace(/[）]/g, ")")
+    .replace(/[：]/g, ":")
+    .replace(/[～—–－]/g, "~")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const padTimePart = (value) => String(value).padStart(2, "0");
+const formatTimeValue = (hours, minutes) => `${padTimePart(hours)}:${padTimePart(minutes)}`;
+
+const isValidDateString = (value) =>
+  typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+const parseSlashDate = (value, today) => {
+  const match = String(value).match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (!match) return null;
+
+  const [, monthStr, dayStr, yearStr] = match;
+  const baseYear = yearStr
+    ? Number(yearStr.length === 2 ? `20${yearStr}` : yearStr)
+    : Number(String(today || "").slice(0, 4));
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  const date = new Date(baseYear, month - 1, day);
+
+  if (Number.isNaN(date.getTime())) return null;
+
+  return `${date.getFullYear()}-${padTimePart(date.getMonth() + 1)}-${padTimePart(date.getDate())}`;
+};
+
+const unique = (values = []) =>
+  [...new Set(values.filter((value) => value !== null && value !== undefined && value !== ""))];
+
+const parseIsoDateString = (value) => {
+  if (!isValidDateString(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const shiftDateByDays = (date, days) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const formatDateString = (date) =>
+  `${date.getFullYear()}-${padTimePart(date.getMonth() + 1)}-${padTimePart(date.getDate())}`;
+
+const getMondayBasedWeekRange = (baseDate, weekOffset = 0) => {
+  const shiftedDate = shiftDateByDays(baseDate, weekOffset * 7);
+  const day = shiftedDate.getDay();
+  const offsetToMonday = day === 0 ? -6 : 1 - day;
+  const start = shiftDateByDays(shiftedDate, offsetToMonday);
+  const end = shiftDateByDays(start, 6);
+
+  return {
+    start: formatDateString(start),
+    end: formatDateString(end),
+  };
+};
+
+const extractRelativeWeekRange = (message, context = {}) => {
+  const normalized = normalizeMessageText(message);
+  const baseDate =
+    parseIsoDateString(context.selectedDate) ||
+    parseIsoDateString(context.today);
+
+  if (!baseDate) return null;
+
+  if (/(?:本周|本週|這周|這週)/.test(normalized)) {
+    return getMondayBasedWeekRange(baseDate, 0);
+  }
+
+  if (/(?:下周|下週)/.test(normalized)) {
+    return getMondayBasedWeekRange(baseDate, 1);
+  }
+
+  if (/(?:上周|上週)/.test(normalized)) {
+    return getMondayBasedWeekRange(baseDate, -1);
+  }
+
+  return null;
+};
+
+const getMonthRange = (baseDate, monthOffset = 0) => {
+  const shiftedDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + monthOffset, 1);
+  const start = new Date(shiftedDate.getFullYear(), shiftedDate.getMonth(), 1);
+  const end = new Date(shiftedDate.getFullYear(), shiftedDate.getMonth() + 1, 0);
+
+  return {
+    start: formatDateString(start),
+    end: formatDateString(end),
+  };
+};
+
+const getMonthEdges = (baseDate, monthOffset = 0) => {
+  const shiftedDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + monthOffset, 1);
+  const monthStart = new Date(shiftedDate.getFullYear(), shiftedDate.getMonth(), 1);
+  const monthEnd = new Date(shiftedDate.getFullYear(), shiftedDate.getMonth() + 1, 0);
+
+  return { monthStart, monthEnd };
+};
+
+const extractRelativeMonthRange = (message, context = {}) => {
+  const normalized = normalizeMessageText(message);
+  const baseDate =
+    parseIsoDateString(context.selectedDate) ||
+    parseIsoDateString(context.today);
+
+  if (!baseDate) return null;
+
+  if (/(?:本月|這個月|这个月)/.test(normalized)) {
+    return getMonthRange(baseDate, 0);
+  }
+
+  if (/(?:下個月|下个月|下月)/.test(normalized)) {
+    return getMonthRange(baseDate, 1);
+  }
+
+  if (/(?:上個月|上个月|上月)/.test(normalized)) {
+    return getMonthRange(baseDate, -1);
+  }
+
+  return null;
+};
+
+const extractRelativeDateRange = (message, context = {}) => {
+  const normalized = normalizeMessageText(message);
+  const baseDate =
+    parseIsoDateString(context.selectedDate) ||
+    parseIsoDateString(context.today);
+
+  if (!baseDate) return null;
+
+  if (/(?:明天|翌日)/.test(normalized)) {
+    const target = shiftDateByDays(baseDate, 1);
+    return { start: formatDateString(target), end: formatDateString(target) };
+  }
+
+  if (/(?:後天)/.test(normalized)) {
+    const target = shiftDateByDays(baseDate, 2);
+    return { start: formatDateString(target), end: formatDateString(target) };
+  }
+
+  if (/(?:這三天|这三天)/.test(normalized)) {
+    return {
+      start: formatDateString(baseDate),
+      end: formatDateString(shiftDateByDays(baseDate, 2)),
+    };
+  }
+
+  if (/(?:未來一週|未来一周)/.test(normalized)) {
+    return {
+      start: formatDateString(baseDate),
+      end: formatDateString(shiftDateByDays(baseDate, 6)),
+    };
+  }
+
+  if (/(?:月底前|本月底前)/.test(normalized)) {
+    const { monthEnd } = getMonthEdges(baseDate, 0);
+    return {
+      start: formatDateString(baseDate),
+      end: formatDateString(monthEnd),
+    };
+  }
+
+  if (/(?:月初)/.test(normalized)) {
+    const { monthStart } = getMonthEdges(baseDate, 0);
+    return {
+      start: formatDateString(monthStart),
+      end: formatDateString(shiftDateByDays(monthStart, 9)),
+    };
+  }
+
+  if (/(?:月中)/.test(normalized)) {
+    const middleStart = new Date(baseDate.getFullYear(), baseDate.getMonth(), 11);
+    const middleEnd = new Date(baseDate.getFullYear(), baseDate.getMonth(), 20);
+    return {
+      start: formatDateString(middleStart),
+      end: formatDateString(middleEnd),
+    };
+  }
+
+  if (/(?:月底)/.test(normalized)) {
+    const { monthEnd } = getMonthEdges(baseDate, 0);
+    const monthEndStart = new Date(baseDate.getFullYear(), baseDate.getMonth(), 21);
+    return {
+      start: formatDateString(monthEndStart),
+      end: formatDateString(monthEnd),
+    };
+  }
+
+  return null;
+};
+
+const extractExplicitDates = (message, context = {}) => {
+  const normalized = normalizeMessageText(message);
+  const dates = [];
+
+  const isoMatches = normalized.match(/\d{4}-\d{1,2}-\d{1,2}/g) || [];
+  isoMatches.forEach((value) => {
+    const [year, month, day] = value.split("-").map(Number);
+    dates.push(
+      `${year}-${padTimePart(month)}-${padTimePart(day)}`,
+    );
+  });
+
+  const slashMatches = normalized.match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g) || [];
+  slashMatches.forEach((value) => {
+    const parsed = parseSlashDate(value, context.today);
+    if (parsed) dates.push(parsed);
+  });
+
+  if (/(?:現在|今天|今日|today|now)/i.test(normalized) && isValidDateString(context.today)) {
+    dates.push(context.today);
+  }
+
+  return unique(dates);
+};
+
+const extractExplicitTimeWindow = (message) => {
+  const normalized = normalizeMessageText(message);
+  const match = normalized.match(
+    /(\d{1,2}:\d{2})\s*(?:到|至|~|-)\s*(\d{1,2}:\d{2})/,
+  );
+
+  if (!match) return null;
+
+  const [, start, end] = match;
+  return {
+    start: start.padStart(5, "0"),
+    end: end.padStart(5, "0"),
+    source: "explicit",
+  };
+};
+
+const extractDayPartWindow = (message) => {
+  const normalized = normalizeMessageText(message);
+
+  if (/(上午|早上|早班)/.test(normalized)) {
+    return { ...DAY_PART_WINDOWS.morning, source: "daypart" };
+  }
+
+  if (/(下午|午后|午後)/.test(normalized)) {
+    return { ...DAY_PART_WINDOWS.afternoon, source: "daypart" };
+  }
+
+  if (/(晚上|晚班|夜間|夜晚)/.test(normalized)) {
+    return { ...DAY_PART_WINDOWS.evening, source: "daypart" };
+  }
+
+  return null;
+};
+
+const WEEKDAY_MAP = Object.freeze({
+  0: 0,
+  7: 0,
+  日: 0,
+  天: 0,
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+});
+
+const parseWeekdayToken = (token) =>
+  token
+    .split("")
+    .map((char) => WEEKDAY_MAP[char] ?? null)
+    .filter((value) => value !== null);
+
+const extractWeekdayValues = (message) => {
+  const normalized = normalizeMessageText(message);
+  const matches = [];
+
+  if (/(?:週末|周末)/.test(normalized)) {
+    matches.push(0, 6);
+  }
+
+  if (/(?:平日)/.test(normalized)) {
+    matches.push(1, 2, 3, 4, 5);
+  }
+
+  const prefixRegex = /(?:週|周|星期|禮拜|礼拜)\s*([一二三四五六日天0-7]+)/g;
+  let match;
+  while ((match = prefixRegex.exec(normalized)) !== null) {
+    matches.push(...parseWeekdayToken(match[1]));
+  }
+
+  const compactRegex =
+    /(?:^|[\s,，、])([一二三四五六日天]{1,7})(?=(?:[^\u4e00-\u9fff]|上午|下午|晚上|有空|空班|可排|分鐘|分鍾|mins?|minutes?|半小時|半個小時|半个小时|$))/g;
+  while ((match = compactRegex.exec(normalized)) !== null) {
+    const token = match[1];
+    if (![...token].every((char) => char in WEEKDAY_MAP)) continue;
+    matches.push(...parseWeekdayToken(token));
+  }
+
+  const rangeRegex = /([一二三四五六日天])\s*(?:到|至|-|~)\s*([一二三四五六日天])/g;
+  while ((match = rangeRegex.exec(normalized)) !== null) {
+    const start = WEEKDAY_MAP[match[1]];
+    const end = WEEKDAY_MAP[match[2]];
+    if (start === null || start === undefined || end === null || end === undefined) continue;
+    if (start <= end) {
+      for (let day = start; day <= end; day += 1) {
+        matches.push(day);
+      }
+      continue;
+    }
+    for (let day = start; day <= 6; day += 1) {
+      matches.push(day);
+    }
+    for (let day = 0; day <= end; day += 1) {
+      matches.push(day);
+    }
+  }
+
+  return unique(matches);
+};
+
+const parseWeekdayChars = (text = "") =>
+  [...String(text)]
+    .map((char) => WEEKDAY_MAP[char] ?? null)
+    .filter((value) => value !== null);
+
+const resolveRelativeWeekRange = (message, context = {}) => {
+  const normalized = normalizeMessageText(message);
+  const baseDate =
+    parseIsoDateString(context.selectedDate) ||
+    parseIsoDateString(context.today);
+
+  if (!baseDate) return null;
+
+  if (/(?:本周|本週|這周|這週)/.test(normalized)) {
+    return getMondayBasedWeekRange(baseDate, 0);
+  }
+
+  if (/(?:下下周|下下週)/.test(normalized)) {
+    return getMondayBasedWeekRange(baseDate, 2);
+  }
+
+  if (/(?:下周|下週)/.test(normalized)) {
+    return getMondayBasedWeekRange(baseDate, 1);
+  }
+
+  if (/(?:上周|上週)/.test(normalized)) {
+    return getMondayBasedWeekRange(baseDate, -1);
+  }
+
+  return null;
+};
+
+const resolveRelativeMonthRange = (message, context = {}) => {
+  const normalized = normalizeMessageText(message);
+  const baseDate =
+    parseIsoDateString(context.selectedDate) ||
+    parseIsoDateString(context.today);
+
+  if (!baseDate) return null;
+
+  if (/(?:本月|這個月|这个月)/.test(normalized)) {
+    return getMonthRange(baseDate, 0);
+  }
+
+  if (/(?:下個月|下个月|下月)/.test(normalized)) {
+    return getMonthRange(baseDate, 1);
+  }
+
+  if (/(?:上個月|上个月|上月)/.test(normalized)) {
+    return getMonthRange(baseDate, -1);
+  }
+
+  return null;
+};
+
+const resolveRelativeDateRange = (message, context = {}) => {
+  const normalized = normalizeMessageText(message);
+  const baseDate =
+    parseIsoDateString(context.selectedDate) ||
+    parseIsoDateString(context.today);
+
+  if (!baseDate) return null;
+
+  if (/(?:明天|翌日)/.test(normalized)) {
+    const target = shiftDateByDays(baseDate, 1);
+    return { start: formatDateString(target), end: formatDateString(target) };
+  }
+
+  if (/(?:後天)/.test(normalized)) {
+    const target = shiftDateByDays(baseDate, 2);
+    return { start: formatDateString(target), end: formatDateString(target) };
+  }
+
+  if (/(?:這三天|这三天)/.test(normalized)) {
+    return {
+      start: formatDateString(baseDate),
+      end: formatDateString(shiftDateByDays(baseDate, 2)),
+    };
+  }
+
+  if (/(?:未來一週|未来一周)/.test(normalized)) {
+    return {
+      start: formatDateString(baseDate),
+      end: formatDateString(shiftDateByDays(baseDate, 6)),
+    };
+  }
+
+  if (/(?:月底前|本月底前)/.test(normalized)) {
+    const { monthEnd } = getMonthEdges(baseDate, 0);
+    return {
+      start: formatDateString(baseDate),
+      end: formatDateString(monthEnd),
+    };
+  }
+
+  if (/(?:月初)/.test(normalized)) {
+    const { monthStart } = getMonthEdges(baseDate, 0);
+    return {
+      start: formatDateString(monthStart),
+      end: formatDateString(shiftDateByDays(monthStart, 9)),
+    };
+  }
+
+  if (/(?:月中)/.test(normalized)) {
+    const middleStart = new Date(baseDate.getFullYear(), baseDate.getMonth(), 11);
+    const middleEnd = new Date(baseDate.getFullYear(), baseDate.getMonth(), 20);
+    return {
+      start: formatDateString(middleStart),
+      end: formatDateString(middleEnd),
+    };
+  }
+
+  if (/(?:本月最後一週|本月最后一周)/.test(normalized)) {
+    const { monthStart, monthEnd } = getMonthEdges(baseDate, 0);
+    const lastWeekStart = shiftDateByDays(
+      monthEnd,
+      monthEnd.getDay() === 0 ? -6 : 1 - monthEnd.getDay(),
+    );
+    return {
+      start: formatDateString(lastWeekStart < monthStart ? monthStart : lastWeekStart),
+      end: formatDateString(monthEnd),
+    };
+  }
+
+  if (/(?:月底)/.test(normalized)) {
+    const { monthEnd } = getMonthEdges(baseDate, 0);
+    const monthEndStart = new Date(baseDate.getFullYear(), baseDate.getMonth(), 21);
+    return {
+      start: formatDateString(monthEndStart),
+      end: formatDateString(monthEnd),
+    };
+  }
+
+  const dayToWeekdayMatch = normalized.match(
+    /(?:今天|今日)\s*(?:到|至|-|~)\s*(?:週|周|星期|禮拜)?([一二三四五六日天])/,
+  );
+  if (dayToWeekdayMatch) {
+    const targetWeekday = WEEKDAY_MAP[dayToWeekdayMatch[1]];
+    const currentWeekday = baseDate.getDay();
+    const diff = targetWeekday - currentWeekday;
+    if (diff >= 0) {
+      return {
+        start: formatDateString(baseDate),
+        end: formatDateString(shiftDateByDays(baseDate, diff)),
+      };
+    }
+  }
+
+  return null;
+};
+
+const resolveWeekdayValues = (message) => {
+  const normalized = normalizeMessageText(message);
+  const matches = [...extractWeekdayValues(message)];
+
+  if (/(?:週末|周末)/.test(normalized)) {
+    matches.push(0, 6);
+  }
+
+  if (/(?:平日)/.test(normalized)) {
+    matches.push(1, 2, 3, 4, 5);
+  }
+
+  const compactRangeMatch = normalized.match(/([一二三四五六日天])\s*(?:到|至|-|~)\s*([一二三四五六日天])/);
+  if (compactRangeMatch) {
+    const start = WEEKDAY_MAP[compactRangeMatch[1]];
+    const end = WEEKDAY_MAP[compactRangeMatch[2]];
+    if (start !== undefined && start !== null && end !== undefined && end !== null) {
+      if (start <= end) {
+        for (let day = start; day <= end; day += 1) {
+          matches.push(day);
+        }
+      } else {
+        for (let day = start; day <= 6; day += 1) {
+          matches.push(day);
+        }
+        for (let day = 0; day <= end; day += 1) {
+          matches.push(day);
+        }
+      }
+    }
+  }
+
+  const perWeekMatch = normalized.match(/(?:每週|每周)([一二三四五六日天]+)/);
+  if (perWeekMatch) {
+    matches.push(...parseWeekdayChars(perWeekMatch[1]));
+  }
+
+  return unique(matches);
+};
+
+const extractRequiredMinutes = (message) => {
+  const normalized = normalizeMessageText(message);
+
+  if (/(半小時|半个小时|半個小時)/i.test(normalized)) {
+    return 30;
+  }
+
+  const minuteMatch = normalized.match(/(\d+)\s*(?:分鐘|分鍾|mins?|minutes?)/i);
+  if (minuteMatch) return Number(minuteMatch[1]);
+
+  const hourMatch = normalized.match(/(\d+)\s*(?:小時|小时|hrs?|hours?)/i);
+  if (hourMatch) return Number(hourMatch[1]) * 60;
+
+  return null;
+};
+
+const inferDateMatchMode = (message) => {
+  const normalized = normalizeMessageText(message);
+
+  if (/(其中一天|任一天|任一日|至少一天|任何一天|有一天|其中一日)/.test(normalized)) {
+    return "any";
+  }
+
+  if (/(都要|每一天|每天都|同時|全部都|都符合|皆可)/.test(normalized)) {
+    return "all";
+  }
+
+  return null;
+};
+
+const inferIncludeOffDuty = (message) =>
+  /(休假|休息|例假|休息日|放假)/.test(normalizeMessageText(message)) || null;
+
+const inferIntentFromDeterministicQuery = (query) => {
+  const normalized = normalizeQueryShape(query);
+  const hasDates = Array.isArray(normalized.dates) && normalized.dates.length > 0;
+  const hasDateRange =
+    Boolean(normalized.dateRangeStart) && Boolean(normalized.dateRangeEnd);
+  const hasWeekdays =
+    Array.isArray(normalized.weekdayValues) && normalized.weekdayValues.length > 0;
+
+  if (hasWeekdays) return "find_staff_for_weekly_pattern";
+  if (hasDates || hasDateRange) return "find_staff_for_dates";
+  return null;
+};
+
+export const buildDeterministicQueryHint = (message, context = {}) => {
+  const explicitTimeWindow = extractExplicitTimeWindow(message);
+  const dayPartWindow = explicitTimeWindow ? null : extractDayPartWindow(message);
+  const dates = extractExplicitDates(message, context);
+  const weekdayValues = resolveWeekdayValues(message);
+  const relativeWeekRange = resolveRelativeWeekRange(message, context);
+  const relativeMonthRange = resolveRelativeMonthRange(message, context);
+  const relativeDateRange = resolveRelativeDateRange(message, context);
+  const requiredMinutes = extractRequiredMinutes(message);
+  const dateMatchMode = inferDateMatchMode(message);
+  const includeOffDuty = inferIncludeOffDuty(message);
+  const inferredDateRange =
+    relativeDateRange || relativeWeekRange || relativeMonthRange;
+  const treatAsDateRangeOnly =
+    /(?:今天|今日)\s*(?:到|至|-|~)\s*(?:週|周|星期|禮拜)?[一二三四五六日天]/.test(
+      normalizeMessageText(message),
+    );
+
+  const query = normalizeQueryShape({
+    dates: dates.length > 0 ? dates : null,
+    weekdayValues:
+      !treatAsDateRangeOnly && weekdayValues.length > 0 ? weekdayValues : null,
+    dateRangeStart: inferredDateRange?.start || null,
+    dateRangeEnd: inferredDateRange?.end || null,
+    timeWindowStart: explicitTimeWindow?.start || dayPartWindow?.start || null,
+    timeWindowEnd: explicitTimeWindow?.end || dayPartWindow?.end || null,
+    requiredMinutes,
+    dateMatchMode,
+    includeOffDuty,
+  });
+
+  const intent = inferIntentFromDeterministicQuery(query);
+  const notes = [];
+
+  if (dates.length > 0 && /(?:現在|今天|今日|today|now)/i.test(normalizeMessageText(message))) {
+    notes.push("將「現在/今天」解析為今天日期");
+  }
+
+  if (dayPartWindow) {
+    notes.push(
+      `將時段詞解析為 ${dayPartWindow.start}-${dayPartWindow.end}`,
+    );
+  }
+
+  if (explicitTimeWindow) {
+    notes.push(
+      `將明確時間區間解析為 ${explicitTimeWindow.start}-${explicitTimeWindow.end}`,
+    );
+  }
+
+  if (requiredMinutes) {
+    notes.push(`將時長解析為 ${requiredMinutes} 分鐘`);
+  }
+
+  if (weekdayValues.length > 0) {
+    notes.push(`將星期條件解析為 ${weekdayValues.join(",")}`);
+  }
+
+  if (relativeWeekRange) {
+    notes.push(`relative week: ${relativeWeekRange.start} ~ ${relativeWeekRange.end}`);
+  }
+
+  if (relativeMonthRange) {
+    notes.push(`relative month: ${relativeMonthRange.start} ~ ${relativeMonthRange.end}`);
+  }
+
+  if (relativeDateRange) {
+    notes.push(`relative date range: ${relativeDateRange.start} ~ ${relativeDateRange.end}`);
+  }
+
+  return {
+    intent,
+    query,
+    explanation: notes.join("；"),
+    shouldShortCircuit:
+      Boolean(intent) &&
+      ((intent === "find_staff_for_dates" &&
+        ((Array.isArray(query.dates) && query.dates.length > 0) ||
+          (query.dateRangeStart && query.dateRangeEnd)) &&
+        query.timeWindowStart &&
+        query.timeWindowEnd) ||
+        (intent === "find_staff_for_weekly_pattern" &&
+          Array.isArray(query.weekdayValues) &&
+          query.weekdayValues.length > 0)),
+  };
+};
+
+const applyQueryDefaults = (intent, query, context = {}) => {
+  const normalized = normalizeQueryShape(query);
+
+  if (intent === "find_staff_for_weekly_pattern") {
+    if (!normalized.dateRangeStart && isValidDateString(context.dateRangeStart)) {
+      normalized.dateRangeStart = context.dateRangeStart;
+    }
+    if (!normalized.dateRangeEnd && isValidDateString(context.dateRangeEnd)) {
+      normalized.dateRangeEnd = context.dateRangeEnd;
+    }
+    if (!normalized.dateMatchMode) {
+      normalized.dateMatchMode = "all";
+    }
+  }
+
+  if (intent === "find_staff_for_dates" && !normalized.dateMatchMode) {
+    normalized.dateMatchMode = "all";
+  }
+
+  return normalized;
+};
+
 const getMissingFields = (intent, query) => {
   const normalized = normalizeQueryShape(query);
   const hasDates = Array.isArray(normalized.dates) && normalized.dates.length > 0;
@@ -221,13 +904,7 @@ const getMissingFields = (intent, query) => {
   }
 
   if (intent === "find_staff_for_weekly_pattern") {
-    const missing = [];
-    if (!hasWeekdays) missing.push("weekdayValues");
-    if (!normalized.dateRangeStart || !normalized.dateRangeEnd) {
-      missing.push("dateRange");
-    }
-    if (!normalized.requiredMinutes) missing.push("requiredMinutes");
-    return missing;
+    return hasWeekdays ? [] : ["weekdayValues"];
   }
 
   if (intent === "check_person_availability") {
@@ -243,51 +920,55 @@ const getMissingFields = (intent, query) => {
 const buildFallbackClarification = (intent, missingFields = []) => {
   if (intent === "check_person_availability") {
     if (missingFields.includes("staff")) {
-      return "請問您要查詢哪位員工？";
+      return "請告訴我要查哪位員工。";
     }
     if (missingFields.includes("dates")) {
-      return "請問您要查詢哪一天或哪幾天？";
+      return "請告訴我要查哪一天或哪幾天。";
     }
   }
 
   if (intent === "find_staff_for_dates") {
     if (missingFields.includes("dates") && missingFields.includes("timeWindow")) {
-      return "請問您要查詢哪一天，以及哪個時間區段？";
+      return "請補充日期與時間區間，例如 4/25 下午 2:00 到 4:00。";
     }
     if (missingFields.includes("dates")) {
-      return "請問您要查詢哪一天或哪幾天？";
+      return "請補充要查哪一天或哪幾天。";
     }
     if (missingFields.includes("timeWindow")) {
-      return "請問您要查詢哪個時間區段？";
+      return "請補充要查的時間區間，例如上午、下午或 14:00 到 15:00。";
     }
   }
 
   if (intent === "find_staff_for_weekly_pattern") {
-    return "請再補充要查詢的日期範圍、星期幾，以及需要的空檔時長。";
+    return "請補充要查星期幾，例如星期二、三、五。";
   }
 
-  return "我還需要更多資訊才能完成這個查詢。";
+  return "請再補充一點查詢條件，我才能幫你排班。";
 };
 
-const postProcessAgentQuery = (parsed, context = {}) => {
+export const postProcessAgentQuery = (parsed, context = {}) => {
   const agentMode = context.agentMode || "new_query";
   const pendingIntent =
     context.pendingIntent && context.pendingIntent !== "none"
       ? context.pendingIntent
       : null;
-  const normalizedParsedQuery = normalizeQueryShape(
-    parsed.partialQuery || parsed.query || {},
-  );
+  const deterministicIntent =
+    context.deterministicIntent && context.deterministicIntent !== "none"
+      ? context.deterministicIntent
+      : null;
+  const deterministicQuery = normalizeQueryShape(context.deterministicQuery || {});
+  const llmQuery = normalizeQueryShape(parsed.partialQuery || parsed.query || {});
+  const baseQuery = mergePendingQuery(deterministicQuery, llmQuery);
   const effectiveIntent =
     parsed.intent && parsed.intent !== "none"
       ? parsed.intent
-      : agentMode === "fill_missing_fields" && pendingIntent
-        ? pendingIntent
-        : "none";
+      : deterministicIntent ||
+        (agentMode === "fill_missing_fields" && pendingIntent ? pendingIntent : "none");
   const mergedQuery =
     agentMode === "fill_missing_fields" && pendingIntent
-      ? mergePendingQuery(context.pendingQuery || {}, normalizedParsedQuery)
-      : normalizedParsedQuery;
+      ? mergePendingQuery(context.pendingQuery || {}, baseQuery)
+      : baseQuery;
+  const normalizedMergedQuery = applyQueryDefaults(effectiveIntent, mergedQuery, context);
 
   if (parsed.status === "error") {
     return {
@@ -299,45 +980,145 @@ const postProcessAgentQuery = (parsed, context = {}) => {
     };
   }
 
-  const missingFields = getMissingFields(effectiveIntent, mergedQuery);
+  const missingFields = getMissingFields(effectiveIntent, normalizedMergedQuery);
 
   if (missingFields.length > 0) {
     return {
       status: "needs_clarification",
       intent: effectiveIntent,
-      explanation: parsed.explanation || "",
+      explanation: parsed.explanation || context.deterministicExplanation || "",
       clarification:
         parsed.clarification || buildFallbackClarification(effectiveIntent, missingFields),
       pendingIntent: effectiveIntent,
       query: normalizeQueryShape(parsed.query || {}),
-      partialQuery: mergedQuery,
+      partialQuery: normalizedMergedQuery,
       missingFields,
-    };
-  }
-
-  if (parsed.status === "needs_clarification") {
-    return {
-      status: "ok",
-      intent: effectiveIntent,
-      explanation: parsed.explanation || "",
-      clarification: "",
-      pendingIntent: null,
-      query: mergedQuery,
-      partialQuery: normalizeQueryShape(parsed.partialQuery || {}),
-      missingFields: null,
     };
   }
 
   return {
     status: "ok",
     intent: effectiveIntent,
-    explanation: parsed.explanation || "",
+    explanation: parsed.explanation || context.deterministicExplanation || "",
     clarification: "",
     pendingIntent: null,
-    query: mergedQuery,
+    query: normalizedMergedQuery,
     partialQuery: normalizeQueryShape(parsed.partialQuery || {}),
     missingFields: null,
   };
+};
+
+const buildPrompt = ({ message, context, deterministicHint }) => `
+你是一個「排班查詢語意解析器」，只負責把使用者問題轉成 JSON，不要回答排班結果。
+
+目前模式：${context.agentMode === "fill_missing_fields" ? "fill_missing_fields（補完上一題）" : "new_query（新查詢）"}
+
+請遵守以下規則：
+1. 只能輸出符合 schema 的 JSON。
+2. 日期一律用 YYYY-MM-DD。
+3. 時間一律用 24 小時制 HH:MM。
+4. 如果資訊不足，請回傳 status = "needs_clarification" 並用 clarification 提出最少且最精準的追問。
+5. intent 僅能是：
+   - "find_staff_for_dates"：找符合日期與時間條件的人
+   - "find_staff_for_weekly_pattern"：找某些星期幾固定符合條件的人
+   - "check_person_availability"：查特定員工在哪些日期有空
+   - "none"
+6. 若語意明顯在查特定員工，而且出現多個人名，請優先填 query.staffNames；單一人名填 query.staffName。
+7. 如果使用者問的是「誰有空／哪些人有空」，不要填 staffName 或 staffNames。
+8. 「現在」或「今天」視為今天日期。
+9. 時段詞對應如下：
+   - 上午 = 08:00-12:00
+   - 下午 = 12:00-18:00
+   - 晚上 = 18:00-22:00
+10. 若沒給週期型查詢的日期範圍，使用目前資料區間：
+   - query.dateRangeStart = ${context.dateRangeStart || "null"}
+   - query.dateRangeEnd = ${context.dateRangeEnd || "null"}
+11. 「二三五 / 週二週三週五 / 星期二三五 / 禮拜二三五」優先解析為 weekdayValues，而不是具體日期列表。
+12. 若語意是「每一天都要符合 / 同時符合 / 都有空」，query.dateMatchMode = "all"。
+13. 若語意是「其中一天即可 / 任一天可以 / 有一天有空」，query.dateMatchMode = "any"。
+14. 若語意提到休假、休息日也要列出，可設定 query.includeOffDuty = true。
+15. 在 fill_missing_fields 模式下：
+   - 你要沿用上一題的 intent 與已知欄位。
+   - 使用者這一句通常只是在補缺欄位，不要把它硬判成全新查詢。
+16. 請參考 deterministic hint。它是規則解析出的高信心欄位，可以延續、補完，但不要隨意推翻。
+
+Few-shot 例子：
+- 「現在誰下午有空班30分鐘」
+  intent = "find_staff_for_dates"
+  query.dates = ["${context.today}"]
+  query.timeWindowStart = "12:00"
+  query.timeWindowEnd = "18:00"
+  query.requiredMinutes = 30
+- 「二三五下午有30分鐘的空班」
+  intent = "find_staff_for_weekly_pattern"
+  query.weekdayValues = [2,3,5]
+  query.timeWindowStart = "12:00"
+  query.timeWindowEnd = "18:00"
+  query.requiredMinutes = 30
+  query.dateRangeStart = "${context.dateRangeStart || ""}"
+  query.dateRangeEnd = "${context.dateRangeEnd || ""}"
+- 「這週哪三天下午有人有30分鐘空班」
+  若無法可靠解析「哪三天」的最終運算方式，至少不要誤判成人員查詢；可回 needs_clarification，確認要列日期還是列人員。
+
+今天日期：${context.today}
+時區：${context.timezone}
+目前資料區間：${context.dateRange || "未知"}
+資料區間起訖：${context.dateRangeStart || "未知"} ~ ${context.dateRangeEnd || "未知"}
+目前可查詢機構：${(context.orgNames || []).join("、") || "未載入"}
+目前範圍說明：${context.scopeSummary || "全部機構"}
+支援意圖：${(context.supportedIntents || []).join(", ")}
+
+規則預解析結果：
+${JSON.stringify(deterministicHint, null, 2)}
+
+最近對話：
+${Array.isArray(context.conversationHistory) && context.conversationHistory.length > 0
+    ? context.conversationHistory
+        .map((item) => `${item.role === "assistant" ? "助手" : "使用者"}：${item.content}`)
+        .join("\n")
+    : "無"}
+
+待補完資訊：
+- pendingIntent：${context.pendingIntent || "無"}
+- missingFields：${Array.isArray(context.missingFields) && context.missingFields.length > 0 ? context.missingFields.join(", ") : "無"}
+- pendingQuery：${context.pendingQuery ? JSON.stringify(normalizeQueryShape(context.pendingQuery), null, 2) : "無"}
+
+使用者訊息：
+${message}
+`;
+
+const extractResponseText = (payload) => {
+  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text;
+  }
+
+  if (Array.isArray(payload?.output)) {
+    const chunks = [];
+
+    payload.output.forEach((item) => {
+      if (!Array.isArray(item?.content)) return;
+
+      item.content.forEach((contentItem) => {
+        if (typeof contentItem?.text === "string" && contentItem.text.trim()) {
+          chunks.push(contentItem.text);
+          return;
+        }
+
+        if (
+          typeof contentItem?.output_text === "string" &&
+          contentItem.output_text.trim()
+        ) {
+          chunks.push(contentItem.output_text);
+        }
+      });
+    });
+
+    if (chunks.length > 0) {
+      return chunks.join("\n").trim();
+    }
+  }
+
+  return null;
 };
 
 const sendJson = (res, statusCode, payload) => {
@@ -421,108 +1202,31 @@ const readJsonBody = async (req) => {
   return raw ? JSON.parse(raw) : {};
 };
 
-const buildPrompt = ({ message, context }) => `
-你是居服排班工具的查詢解析器。你的工作只有把中文自然語言轉成結構化查詢 JSON，不要回答名單，不要自行推論排班結果。
+export const parseAgentQuery = async (body) => {
+  const deterministicHint = buildDeterministicQueryHint(body.message, body.context || {});
+  const enrichedContext = {
+    ...(body.context || {}),
+    deterministicIntent: deterministicHint.intent || null,
+    deterministicQuery: deterministicHint.query,
+    deterministicExplanation: deterministicHint.explanation,
+  };
 
-目前模式：${context.agentMode === "fill_missing_fields" ? "fill_missing_fields（補完上一題）" : "new_query（新查詢）"}
-
-請遵守：
-1. 僅輸出符合 schema 的 JSON。
-2. 日期一律輸出 YYYY-MM-DD。
-3. 時間一律輸出 24 小時制 HH:MM。
-4. 如果資訊不足，回傳 status = "needs_clarification" 並在 clarification 裡追問。
-5. 若查詢是：
-   - 多日期找人：intent = "find_staff_for_dates"
-   - 每週規則找人：intent = "find_staff_for_weekly_pattern"
-   - 指定員工查多日：intent = "check_person_availability"
-   - 若使用者明確指定多位員工，請把所有姓名放進 query.staffNames
-   - 若只有一位員工，可同時填 query.staffName 與 query.staffNames
-6. 若使用者只說「有沒有空」但沒給時段：
-   - 指定員工查詢可接受，表示查該日整天空檔
-   - 找人查詢不可直接猜，需回 needs_clarification
-7. "本月" 請依今天日期解析。
-8. 多日期找人時：
-   - 若語意是「每一天都要符合 / 同時符合 / 都有空」，query.dateMatchMode = "all"
-   - 若語意是「其中一天也可以 / 任一天有空 / 任一日即可」，query.dateMatchMode = "any"
-   - 若未明說，預設用 "all"
-9. 若目前這句話看起來是在回答上一輪追問，例如「查所有人」「就這幾天」「包含休假」「其中一天也行」：
-   - 先結合對話紀錄補齊前文已提供的日期、時段、對象與條件
-   - 除非結合後仍缺必要資訊，否則不要重複追問
-10. 若使用者提到「包含休假人員 / 休假也列出 / 也要看休假的人」，query.includeOffDuty = true。
-11. 在 fill_missing_fields 模式：
-   - 目前這句話是補充上一題，不是新的獨立查詢
-   - 優先沿用上一題已知條件，只填入這輪新提供的資訊
-   - 若使用者說「整天的空閒時段 / 全天 / 整天」，且上一題已是指定員工查某日，應補成整天查詢：
-     - intent = "check_person_availability"
-     - 保留上一題的 staff 與 dates
-     - query.timeWindowStart = null
-     - query.timeWindowEnd = null
-     - query.requiredMinutes = null
-     - 直接回 status = "ok"，不要再追問員工或日期
-   - 若使用者說「查所有人」，表示 staffName = null 且 staffNames = null
-12. explanation 用一句話描述你如何理解這句話。
-
-今天日期：${context.today}
-時區：${context.timezone}
-目前資料區間：${context.dateRange || "未知"}
-目前可查詢機構：${(context.orgNames || []).join("、") || "未載入"}
-目前範圍說明：${context.scopeSummary || "全部機構"}
-支援意圖：${(context.supportedIntents || []).join(", ")}
-
-最近對話紀錄（由舊到新）：
-${Array.isArray(context.conversationHistory) && context.conversationHistory.length > 0
-    ? context.conversationHistory
-        .map((item) => `${item.role === "assistant" ? "助手" : "使用者"}：${item.content}`)
-        .join("\n")
-    : "無"}
-
-目前未完成查詢：
-意圖：${context.pendingIntent || "無"}
-缺少欄位：${Array.isArray(context.missingFields) && context.missingFields.length > 0 ? context.missingFields.join("、") : "無"}
-已知查詢欄位：${context.pendingQuery ? JSON.stringify(normalizeQueryShape(context.pendingQuery), null, 2) : "無"}
-
-使用者問題：
-${message}
-`;
-
-const extractResponseText = (payload) => {
-  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
-    return payload.output_text;
+  if (deterministicHint.shouldShortCircuit && deterministicHint.intent) {
+    return postProcessAgentQuery(
+      {
+        status: "ok",
+        intent: deterministicHint.intent,
+        explanation: deterministicHint.explanation,
+        clarification: "",
+        pendingIntent: null,
+        query: deterministicHint.query,
+        partialQuery: deterministicHint.query,
+        missingFields: null,
+      },
+      enrichedContext,
+    );
   }
 
-  if (Array.isArray(payload?.output)) {
-    const chunks = [];
-
-    payload.output.forEach((item) => {
-      if (!Array.isArray(item?.content)) return;
-
-      item.content.forEach((contentItem) => {
-        if (
-          typeof contentItem?.text === "string" &&
-          contentItem.text.trim()
-        ) {
-          chunks.push(contentItem.text);
-          return;
-        }
-
-        if (
-          typeof contentItem?.output_text === "string" &&
-          contentItem.output_text.trim()
-        ) {
-          chunks.push(contentItem.output_text);
-        }
-      });
-    });
-
-    if (chunks.length > 0) {
-      return chunks.join("\n").trim();
-    }
-  }
-
-  return null;
-};
-
-const parseAgentQuery = async (body) => {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("Missing OPENAI_API_KEY");
   }
@@ -535,8 +1239,12 @@ const parseAgentQuery = async (body) => {
     },
     body: JSON.stringify({
       model: MODEL,
-      instructions: "將自然語言查詢轉成結構化 JSON。",
-      input: buildPrompt(body),
+      instructions: "你是查詢解析器。只輸出符合 schema 的 JSON，不要輸出任何額外文字。",
+      input: buildPrompt({
+        message: body.message,
+        context: enrichedContext,
+        deterministicHint,
+      }),
       text: {
         format: {
           type: "json_schema",
@@ -560,7 +1268,7 @@ const parseAgentQuery = async (body) => {
     );
   }
 
-  return postProcessAgentQuery(JSON.parse(responseText), body.context || {});
+  return postProcessAgentQuery(JSON.parse(responseText), enrichedContext);
 };
 
 const server = http.createServer(async (req, res) => {
@@ -612,7 +1320,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       writeSseEvent(res, "status", {
-        message: "正在理解你的問題...",
+        message: "正在解析排班查詢...",
       });
 
       const parsed = await parseAgentQuery(body);
@@ -641,6 +1349,10 @@ const server = http.createServer(async (req, res) => {
   sendJson(res, 404, { status: "error", error: "Not found" });
 });
 
-server.listen(PORT, () => {
-  console.log(`AI agent API listening on http://localhost:${PORT}`);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  server.listen(PORT, () => {
+    console.log(`AI agent API listening on http://localhost:${PORT}`);
+  });
+}
+
+export { DAY_PART_WINDOWS, server };

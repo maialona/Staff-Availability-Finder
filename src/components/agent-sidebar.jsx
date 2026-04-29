@@ -1,14 +1,123 @@
 import React from "react";
 import {
   Bot,
+  ChevronDown,
   Check,
+  Clock3,
   Copy,
   Loader2,
   Send,
   Sparkles,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
+
+const ResultChip = ({ icon: Icon, children }) => (
+  <div className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+    <Icon className="h-3.5 w-3.5 text-brand-coral" />
+    <span>{children}</span>
+  </div>
+);
+
+const StructuredResultCard = ({ result }) => {
+  if (!result || result.resultType !== "staff_match") return null;
+
+  const availableCards = result.staffCards.filter((card) => card.group === "available");
+  const offDutyCards = result.staffCards.filter((card) => card.group === "offDuty");
+  const summary = result.summary || {};
+  const dateModeText =
+    summary.dateMatchMode === "any" ? "任一天符合" : `全部 ${summary.dateCount || 0} 天符合`;
+
+  const renderCards = (cards, emptyText) => {
+    if (cards.length === 0) {
+      return (
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-500">
+          {emptyText}
+        </div>
+      );
+    }
+
+    return cards.map((card) => (
+      <details
+        key={`${card.group}-${card.staffKey}`}
+        className="group rounded-2xl border border-slate-200 bg-white shadow-sm"
+      >
+        <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-4 py-3">
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-bold text-brand-slate">{card.name}</span>
+              {card.org ? (
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                  {card.org}
+                </span>
+              ) : null}
+              {card.hasPotential ? (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                  含可彈性調整
+                </span>
+              ) : null}
+            </div>
+            <div className="text-xs text-slate-500">符合 {card.matchCount} 筆日期條件</div>
+          </div>
+          <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="border-t border-slate-100 px-4 py-3">
+          <ul className="space-y-2 text-sm leading-6 text-slate-700">
+            {card.reasons.map((reason) => (
+              <li
+                key={`${card.staffKey}-${reason}`}
+                className="rounded-xl bg-slate-50 px-3 py-2"
+              >
+                {reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </details>
+    ));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-brand-coral/20 bg-gradient-to-br from-brand-coral/10 via-white to-brand-teal/10 p-4">
+        <div className="space-y-2">
+          <div className="text-sm font-bold text-brand-slate">{result.title}</div>
+          <p className="text-sm leading-6 text-slate-600">{summary.headline}</p>
+          <div className="flex flex-wrap gap-2">
+            <ResultChip icon={Users}>{summary.totalMatches || 0} 位可出勤</ResultChip>
+            <ResultChip icon={Clock3}>{summary.timeSummary || "不限時段"}</ResultChip>
+          </div>
+          <div className="rounded-xl bg-white/80 px-3 py-2 text-xs leading-5 text-slate-600 ring-1 ring-white">
+            <div>日期條件：{(summary.dates || []).join("、")}</div>
+            <div>比對方式：{dateModeText}</div>
+            {summary.includeOffDuty && summary.offDutyMatches > 0 ? (
+              <div>另有 {summary.offDutyMatches} 位為休假 / 休息日</div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+          可出勤人員
+        </div>
+        <div className="space-y-3">
+          {renderCards(availableCards, "目前沒有可出勤人員。")}
+        </div>
+      </div>
+
+      {offDutyCards.length > 0 ? (
+        <div className="space-y-3">
+          <div className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+            休假 / 休息日
+          </div>
+          <div className="space-y-3">{renderCards(offDutyCards, "")}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+};
 
 export const AgentSidebar = ({
   open,
@@ -176,12 +285,16 @@ export const AgentSidebar = ({
                     )}
                   </div>
                 )}
-                <div className="whitespace-pre-wrap text-sm leading-6">
-                  {message.content}
-                  {message.streaming && (
-                    <span className="ml-0.5 inline-block h-4 w-2 animate-pulse rounded-sm bg-brand-coral/70 align-middle" />
-                  )}
-                </div>
+                {message.structuredResult && !message.streaming ? (
+                  <StructuredResultCard result={message.structuredResult} />
+                ) : (
+                  <div className="whitespace-pre-wrap text-sm leading-6">
+                    {message.content}
+                    {message.streaming && (
+                      <span className="ml-0.5 inline-block h-4 w-2 animate-pulse rounded-sm bg-brand-coral/70 align-middle" />
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

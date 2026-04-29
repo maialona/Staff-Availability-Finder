@@ -1,6 +1,6 @@
 import { eachDayOfInterval, format, isValid } from "date-fns";
-import { calculateDailyAvailability, applyServiceFilter } from "./availability";
-import { applyTimeFilter } from "./filtering";
+import { calculateDailyAvailability, applyServiceFilter } from "./availability.js";
+import { applyTimeFilter } from "./filtering.js";
 
 const DAY_START = "06:00";
 const DAY_END = "22:00";
@@ -12,13 +12,27 @@ export const SUPPORTED_AGENT_INTENTS = [
 ];
 
 const STATUS_LABEL = {
-  available: "完全空閒",
+  available: "可排班",
   potential: "可彈性調整",
-  offDuty: "休假 / 例假",
+  offDuty: "休假 / 休息日",
   unavailable: "無空檔",
 };
 
+const DATE_KEY_CANDIDATES = ["日期", "date", "???交?"];
+
 const getStaffKey = (staff) => staff.staffKey || staff.id || staff.name;
+
+const findScheduleDateValue = (record = {}) => {
+  for (const key of DATE_KEY_CANDIDATES) {
+    if (key in record) return record[key];
+  }
+
+  return Object.entries(record).find(([, value]) => {
+    if (value instanceof Date) return true;
+    if (typeof value !== "string") return false;
+    return /\d{4}-\d{1,2}-\d{1,2}/.test(value) || /\d{1,2}\/\d{1,2}/.test(value);
+  })?.[1];
+};
 
 const formatDateValue = (value) => {
   if (value === null || value === undefined) return null;
@@ -36,9 +50,9 @@ const formatDateValue = (value) => {
 
 const formatTimeRange = (start, end) => `${start}~${end}`;
 
-const buildDateContext = (scheduleData = []) => {
+export const buildDateContext = (scheduleData = []) => {
   const dates = scheduleData
-    .map((record) => formatDateValue(record["服務日期"]))
+    .map((record) => formatDateValue(findScheduleDateValue(record)))
     .filter(Boolean);
 
   const uniqueDates = [...new Set(dates)].sort();
@@ -152,10 +166,10 @@ const buildResultReason = ({
     });
 
     if (timeWindowStart && timeWindowEnd && requiredMinutes) {
-      return `${labelPrefix}${STATUS_LABEL.available}，${formatTimeRange(
+      return `${labelPrefix}${STATUS_LABEL.available}，在 ${formatTimeRange(
         timeWindowStart,
         timeWindowEnd,
-      )} 內有至少 ${requiredMinutes} 分鐘空檔`;
+      )} 內至少有 ${requiredMinutes} 分鐘空檔`;
     }
 
     if (timeWindowStart && timeWindowEnd) {
@@ -171,9 +185,7 @@ const buildResultReason = ({
   if (entry.status === "potential") {
     const firstFlex = entry.person.flexContexts?.[0];
     if (firstFlex) {
-      return `${labelPrefix}${STATUS_LABEL.potential}，需調整「${firstFlex.caseName}」${
-        firstFlex.canMoveEarly ? `提早 ${firstFlex.early} 分鐘` : `延後 ${firstFlex.late} 分鐘`
-      }`;
+      return `${labelPrefix}${STATUS_LABEL.potential}，可透過調整「${firstFlex.caseName}」騰出時間`;
     }
 
     return `${labelPrefix}${STATUS_LABEL.potential}`;
@@ -188,7 +200,9 @@ const buildResultReason = ({
 
 const buildNoDataError = (date, minDate, maxDate) => ({
   status: "error",
-  text: `資料中沒有 ${date} 的排班資料。${minDate && maxDate ? `目前資料區間是 ${minDate} ~ ${maxDate}。` : ""}`,
+  text: `找不到 ${date} 的排班資料。${
+    minDate && maxDate ? `目前資料區間是 ${minDate} ~ ${maxDate}。` : ""
+  }`,
 });
 
 const buildExactStaffMatches = (staffData, staffName) => {
@@ -198,9 +212,9 @@ const buildExactStaffMatches = (staffData, staffName) => {
 };
 
 const buildExactMultiStaffMatches = (staffData, staffNames = []) => {
-  const normalizedNames = [...new Set(
-    (staffNames || []).map((name) => String(name || "").trim()).filter(Boolean),
-  )];
+  const normalizedNames = [
+    ...new Set((staffNames || []).map((name) => String(name || "").trim()).filter(Boolean)),
+  ];
 
   if (normalizedNames.length === 0) return [];
 
@@ -236,19 +250,21 @@ const buildStaffSuggestions = (staffData, staffName) => {
   const normalized = String(staffName || "").trim();
   if (!normalized) return [];
 
-  return [...new Set(
-    staffData
-      .map((staff) => staff.name)
-      .filter(
-        (name) =>
-          String(name).includes(normalized) || normalized.includes(String(name)),
-      ),
-  )].slice(0, 5);
+  return [
+    ...new Set(
+      staffData
+        .map((staff) => staff.name)
+        .filter(
+          (name) =>
+            String(name).includes(normalized) || normalized.includes(String(name)),
+        ),
+    ),
+  ].slice(0, 5);
 };
 
-const buildAnswerPayload = (title, lines) => {
+const buildAnswerPayload = (title, lines, extra = {}) => {
   const text = [title, ...lines].join("\n");
-  return { status: "ok", text, copyText: text };
+  return { status: "ok", text, copyText: text, ...extra };
 };
 
 const isMatchedStatus = (status) => status === "available" || status === "potential";
@@ -318,7 +334,87 @@ const runSingleDateFilter = ({
   };
 };
 
-const executeFindStaffForDates = ({
+const buildNoMatchText = (dates, dateMatchMode) =>
+  dateMatchMode === "any"
+    ? `沒有找到在 ${dates.join("、")} 之中任一天符合條件的人。`
+    : `沒有找到在 ${dates.join("、")} 每一天都符合條件的人。`;
+
+const buildTimeSummary = ({ timeWindowStart, timeWindowEnd, requiredMinutes }) => {
+  if (timeWindowStart && timeWindowEnd && requiredMinutes) {
+    return `${formatTimeRange(timeWindowStart, timeWindowEnd)} 內至少 ${requiredMinutes} 分鐘空檔`;
+  }
+
+  if (timeWindowStart && timeWindowEnd) {
+    return `完整涵蓋 ${formatTimeRange(timeWindowStart, timeWindowEnd)}`;
+  }
+
+  return "不限特定時段";
+};
+
+const buildStaffCard = (staff, details, group) => ({
+  staffKey: getStaffKey(staff),
+  name: staff.name,
+  org: staff.org || "",
+  matchCount: details.reasons.length,
+  hasPotential: Boolean(details.hasPotential),
+  reasons: details.reasons,
+  group,
+});
+
+const buildFindStaffStructuredResult = ({
+  title,
+  dates,
+  dateMatchMode,
+  includeOffDuty,
+  timeWindowStart,
+  timeWindowEnd,
+  requiredMinutes,
+  availabilityCandidates,
+  offDutyCandidates,
+}) => {
+  const staffCards = [
+    ...availabilityCandidates.map((candidate) =>
+      buildStaffCard(candidate.staff, candidate.availability, "available"),
+    ),
+    ...offDutyCandidates.map((candidate) =>
+      buildStaffCard(candidate.staff, candidate.offDuty, "offDuty"),
+    ),
+  ];
+
+  return {
+    title,
+    resultType: "staff_match",
+    summary: {
+      totalMatches: availabilityCandidates.length,
+      offDutyMatches: offDutyCandidates.length,
+      dateCount: dates.length,
+      dates,
+      dateMatchMode,
+      includeOffDuty,
+      timeSummary: buildTimeSummary({
+        timeWindowStart,
+        timeWindowEnd,
+        requiredMinutes,
+      }),
+      headline:
+        dateMatchMode === "any"
+          ? `共 ${availabilityCandidates.length} 位人員在指定日期中至少一天符合條件`
+          : `共 ${availabilityCandidates.length} 位人員符合全部 ${dates.length} 天條件`,
+    },
+    staffCards,
+  };
+};
+
+const expandDateRange = (start, end) => {
+  if (!start || !end) return [];
+
+  return eachDayOfInterval({
+    start: new Date(start),
+    end: new Date(end),
+  }).map((date) => format(date, "yyyy-MM-dd"));
+};
+
+export const executeFindStaffForDates = ({
   query,
   scheduleData,
   staffData,
@@ -326,7 +422,15 @@ const executeFindStaffForDates = ({
   caseSettings,
 }) => {
   const { availableDates, minDate, maxDate } = buildDateContext(scheduleData);
-  const dates = [...new Set((query.dates || []).map(formatDateValue).filter(Boolean))];
+  const explicitDates = (query.dates || []).map(formatDateValue).filter(Boolean);
+  const rangeDates =
+    explicitDates.length === 0 && query.dateRangeStart && query.dateRangeEnd
+      ? expandDateRange(
+          formatDateValue(query.dateRangeStart),
+          formatDateValue(query.dateRangeEnd),
+        )
+      : [];
+  const dates = [...new Set([...explicitDates, ...rangeDates].filter(Boolean))];
   const requestedNames = getRequestedStaffNames(query);
   const scopedStaffData = getScopedStaffData(staffData, query);
 
@@ -366,10 +470,12 @@ const executeFindStaffForDates = ({
   const candidateStaffList =
     requestedNames.length > 0
       ? scopedStaffData
-      : [...new Map([
-          ...scopedStaffData.map((staff) => [getStaffKey(staff), staff]),
-          ...resultStaffMap.entries(),
-        ]).values()];
+      : [
+          ...new Map([
+            ...scopedStaffData.map((staff) => [getStaffKey(staff), staff]),
+            ...resultStaffMap.entries(),
+          ]).values(),
+        ];
 
   const evaluatedCandidates = candidateStaffList
     .map((staff) => {
@@ -443,14 +549,8 @@ const executeFindStaffForDates = ({
   if (availabilityCandidates.length === 0 && offDutyCandidates.length === 0) {
     return {
       status: "ok",
-      text:
-        dateMatchMode === "any"
-          ? `沒有任何人在 ${dates.join("、")} 之中任一天符合條件。`
-          : `沒有任何人同時符合 ${dates.join("、")} 的條件。`,
-      copyText:
-        dateMatchMode === "any"
-          ? `沒有任何人在 ${dates.join("、")} 之中任一天符合條件。`
-          : `沒有任何人同時符合 ${dates.join("、")} 的條件。`,
+      text: buildNoMatchText(dates, dateMatchMode),
+      copyText: buildNoMatchText(dates, dateMatchMode),
     };
   }
 
@@ -460,13 +560,13 @@ const executeFindStaffForDates = ({
     lines.push(
       dateMatchMode === "any"
         ? `可出勤人員：共 ${availabilityCandidates.length} 位在 ${dates.join("、")} 之中至少一天符合條件。`
-        : `可出勤人員：共 ${availabilityCandidates.length} 位符合 ${dates.length} 天條件。`,
+        : `可出勤人員：共 ${availabilityCandidates.length} 位符合全部 ${dates.length} 天條件。`,
     );
     lines.push(
       ...availabilityCandidates.flatMap((candidate) => {
         const label = `${candidate.staff.name}${candidate.staff.org ? `（${candidate.staff.org}）` : ""}`;
         return [
-          ``,
+          "",
           `${label}${candidate.availability.hasPotential ? "｜含可彈性調整" : ""}`,
           ...candidate.availability.reasons,
         ];
@@ -478,8 +578,8 @@ const executeFindStaffForDates = ({
     if (lines.length > 0) lines.push("");
     lines.push(
       dateMatchMode === "any"
-        ? `休假 / 例假人員：共 ${offDutyCandidates.length} 位在 ${dates.join("、")} 之中至少一天為休假。`
-        : `休假 / 例假人員：共 ${offDutyCandidates.length} 位在 ${dates.length} 天皆為休假。`,
+        ? `休假 / 休息日：共 ${offDutyCandidates.length} 位在 ${dates.join("、")} 之中至少一天不出勤。`
+        : `休假 / 休息日：共 ${offDutyCandidates.length} 位在全部 ${dates.length} 天都不出勤。`,
     );
     lines.push(
       ...offDutyCandidates.flatMap((candidate) => {
@@ -489,10 +589,22 @@ const executeFindStaffForDates = ({
     );
   }
 
-  return buildAnswerPayload("查詢結果", lines);
+  return buildAnswerPayload("查詢結果", lines, {
+    structuredResult: buildFindStaffStructuredResult({
+      title: "查詢結果",
+      dates,
+      dateMatchMode,
+      includeOffDuty,
+      timeWindowStart: query.timeWindowStart,
+      timeWindowEnd: query.timeWindowEnd,
+      requiredMinutes: query.requiredMinutes,
+      availabilityCandidates,
+      offDutyCandidates,
+    }),
+  });
 };
 
-const executeFindStaffForWeeklyPattern = ({
+export const executeFindStaffForWeeklyPattern = ({
   query,
   scheduleData,
   staffData,
@@ -518,7 +630,9 @@ const executeFindStaffForWeeklyPattern = ({
   if (intervalDates.length === 0) {
     return {
       status: "error",
-      text: `在 ${start} ~ ${end} 之間找不到可用資料。${minDate && maxDate ? `目前資料區間是 ${minDate} ~ ${maxDate}。` : ""}`,
+      text: `在 ${start} ~ ${end} 之內沒有符合指定星期的排班資料。${
+        minDate && maxDate ? `目前資料區間是 ${minDate} ~ ${maxDate}。` : ""
+      }`,
     };
   }
 
@@ -536,7 +650,7 @@ const executeFindStaffForWeeklyPattern = ({
   });
 };
 
-const executeCheckPersonAvailability = ({
+export const executeCheckPersonAvailability = ({
   query,
   scheduleData,
   staffData,
@@ -558,8 +672,8 @@ const executeCheckPersonAvailability = ({
       status: "error",
       text:
         suggestions.length > 0
-          ? `找不到「${fallbackName}」。你是不是想找：${suggestions.join("、")}？`
-          : `找不到「${fallbackName}」。`,
+          ? `找不到「${fallbackName}」，你是不是想查：${suggestions.join("、")}？`
+          : `找不到員工「${fallbackName}」。`,
     };
   }
 
@@ -574,7 +688,7 @@ const executeCheckPersonAvailability = ({
   }
 
   const lines = [
-    `共查詢 ${staffMatches.length} 位同名員工，日期：${dates.join("、")}`,
+    `查詢 ${staffMatches.length} 位員工在 ${dates.join("、")} 的排班：`,
   ];
 
   staffMatches.forEach((staff) => {
@@ -610,7 +724,7 @@ const executeCheckPersonAvailability = ({
     });
   });
 
-  return buildAnswerPayload("指定員工查詢", lines);
+  return buildAnswerPayload("員工空檔查詢", lines);
 };
 
 export function executeAgentQuery({
@@ -624,8 +738,13 @@ export function executeAgentQuery({
     return { status: "error", text: "AI 沒有回傳可執行的查詢。" };
   }
 
-  if (!Array.isArray(staffData) || staffData.length === 0 || !Array.isArray(scheduleData) || scheduleData.length === 0) {
-    return { status: "error", text: "目前還沒有可查詢的班表資料，請先上傳資料。" };
+  if (
+    !Array.isArray(staffData) ||
+    staffData.length === 0 ||
+    !Array.isArray(scheduleData) ||
+    scheduleData.length === 0
+  ) {
+    return { status: "error", text: "目前沒有可供 AI 查詢的排班或員工資料。" };
   }
 
   switch (parsedQuery.intent) {

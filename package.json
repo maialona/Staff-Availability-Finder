@@ -14,6 +14,7 @@
     "dev:api": "node --watch server/index.mjs",
     "build": "vite build",
     "lint": "eslint .",
+    "test": "node --test",
     "preview": "vite preview",
     "start": "node server/index.mjs"
   },

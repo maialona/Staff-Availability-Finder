@@ -72,7 +72,6 @@ export const StatsView = ({
   dataDateRange,
   orgs = [],
   cardComponent,
-  inputComponent,
   orgDotComponent,
   cn,
 }) => {

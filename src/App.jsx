@@ -741,6 +741,37 @@ function App() {
     return allScheduleData.filter((record) => selectedOrgIds.has(record.__orgId));
   }, [allScheduleData, selectedOrgIds]);
 
+  const dataDateBounds = useMemo(() => {
+    const parsedDates = activeScheduleData
+      .map((record) => {
+        const value =
+          record["日期"] ||
+          record.date ||
+          record["???交?"] ||
+          Object.values(record).find(
+            (item) =>
+              item instanceof Date ||
+              (typeof item === "string" &&
+                (/^\d{4}-\d{1,2}-\d{1,2}$/.test(item) || /^\d{1,2}\/\d{1,2}/.test(item))),
+          );
+
+        if (!value) return null;
+        const parsed = value instanceof Date ? value : new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.getTime() - b.getTime());
+
+    if (parsedDates.length === 0) {
+      return { start: null, end: null };
+    }
+
+    return {
+      start: format(parsedDates[0], "yyyy-MM-dd"),
+      end: format(parsedDates[parsedDates.length - 1], "yyyy-MM-dd"),
+    };
+  }, [activeScheduleData]);
+
   const activeOrgNames = useMemo(() => {
     if (selectedOrgIds.size === 0) return orgs.map((org) => org.name);
     return orgs
@@ -754,6 +785,8 @@ function App() {
       timezone:
         Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Taipei",
       dateRange: dataDateRange,
+      dateRangeStart: dataDateBounds.start,
+      dateRangeEnd: dataDateBounds.end,
       orgNames: activeOrgNames,
       scopeSummary:
         selectedOrgIds.size === 0
@@ -761,7 +794,7 @@ function App() {
           : `目前僅查詢：${activeOrgNames.join("、")}`,
       supportedIntents: SUPPORTED_AGENT_INTENTS,
     }),
-    [activeOrgNames, dataDateRange, selectedOrgIds.size],
+    [activeOrgNames, dataDateBounds.end, dataDateBounds.start, dataDateRange, selectedOrgIds.size],
   );
 
   const appendAgentMessage = (message) => {
@@ -792,11 +825,17 @@ function App() {
     );
   };
 
-  const streamAgentMessageText = async (messageId, text, copyText = text) => {
+  const streamAgentMessageText = async (
+    messageId,
+    text,
+    copyText = text,
+    extraPatch = {},
+  ) => {
     updateAgentMessage(messageId, {
       content: "",
       copyText: "",
       streaming: true,
+      structuredResult: null,
     });
 
     for (const chunk of chunkAgentText(text)) {
@@ -810,6 +849,7 @@ function App() {
       content: text,
       copyText: copyText || text,
       streaming: false,
+      ...extraPatch,
     });
   };
 
@@ -875,6 +915,7 @@ function App() {
         role: "assistant",
         content: "目前還沒有可查詢的班表資料，請先上傳機構班表。",
         copyText: "目前還沒有可查詢的班表資料，請先上傳機構班表。",
+        structuredResult: null,
       });
       return;
     }
@@ -893,6 +934,7 @@ function App() {
         content: "正在理解你的問題...",
         copyText: "",
         streaming: true,
+        structuredResult: null,
       },
     ]);
 
@@ -938,6 +980,7 @@ function App() {
                 content: payload.message || "正在處理中...",
                 copyText: "",
                 streaming: true,
+                structuredResult: null,
               });
               return;
             }
@@ -948,6 +991,7 @@ function App() {
                 content: "已理解問題，正在比對本地排班資料...",
                 copyText: "",
                 streaming: true,
+                structuredResult: null,
               });
               return;
             }
@@ -957,11 +1001,12 @@ function App() {
             }
           });
         }
-      } catch (streamError) {
+      } catch {
         updateAgentMessage(assistantMessageId, {
           content: "目前改用一般模式處理，正在比對本地排班資料...",
           copyText: "",
           streaming: true,
+          structuredResult: null,
         });
         parsedQuery = await fetchAgentQueryFallback(message, activePendingQuery);
       }
@@ -998,6 +1043,9 @@ function App() {
         assistantMessageId,
         executed.text || "查詢完成。",
         executed.copyText || executed.text || "查詢完成。",
+        {
+          structuredResult: executed.structuredResult || null,
+        },
       );
     } catch (error) {
       await streamAgentError(assistantMessageId, error);
