@@ -112,6 +112,7 @@ const AGENT_QUERY_KEYS = [
   "timeWindowStart",
   "timeWindowEnd",
   "requiredMinutes",
+  "minMatchingDays",
   "dateMatchMode",
   "includeOffDuty",
   "includePotential",

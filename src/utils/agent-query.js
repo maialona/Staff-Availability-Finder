@@ -334,10 +334,15 @@ const runSingleDateFilter = ({
   };
 };
 
-const buildNoMatchText = (dates, dateMatchMode) =>
-  dateMatchMode === "any"
+const buildNoMatchText = (dates, dateMatchMode, minMatchingDays) => {
+  if (minMatchingDays) {
+    return `沒有找到在 ${dates.join("、")} 之中至少 ${minMatchingDays} 天符合條件的人。`;
+  }
+
+  return dateMatchMode === "any"
     ? `沒有找到在 ${dates.join("、")} 之中任一天符合條件的人。`
     : `沒有找到在 ${dates.join("、")} 每一天都符合條件的人。`;
+};
 
 const buildTimeSummary = ({ timeWindowStart, timeWindowEnd, requiredMinutes }) => {
   if (timeWindowStart && timeWindowEnd && requiredMinutes) {
@@ -365,6 +370,7 @@ const buildFindStaffStructuredResult = ({
   title,
   dates,
   dateMatchMode,
+  minMatchingDays,
   includeOffDuty,
   timeWindowStart,
   timeWindowEnd,
@@ -390,6 +396,7 @@ const buildFindStaffStructuredResult = ({
       dateCount: dates.length,
       dates,
       dateMatchMode,
+      minMatchingDays: minMatchingDays || null,
       includeOffDuty,
       timeSummary: buildTimeSummary({
         timeWindowStart,
@@ -397,7 +404,9 @@ const buildFindStaffStructuredResult = ({
         requiredMinutes,
       }),
       headline:
-        dateMatchMode === "any"
+        minMatchingDays
+          ? `共 ${availabilityCandidates.length} 位人員在指定日期中至少 ${minMatchingDays} 天符合條件`
+          : dateMatchMode === "any"
           ? `共 ${availabilityCandidates.length} 位人員在指定日期中至少一天符合條件`
           : `共 ${availabilityCandidates.length} 位人員符合全部 ${dates.length} 天條件`,
     },
@@ -465,6 +474,9 @@ export const executeFindStaffForDates = ({
   }));
 
   const dateMatchMode = query.dateMatchMode === "any" ? "any" : "all";
+  const minMatchingDays = Number.isInteger(query.minMatchingDays) && query.minMatchingDays > 0
+    ? Math.min(query.minMatchingDays, dates.length)
+    : null;
   const includeOffDuty = Boolean(query.includeOffDuty);
   const resultStaffMap = collectResultStaffMap(perDate);
   const candidateStaffList =
@@ -495,16 +507,28 @@ export const executeFindStaffForDates = ({
       const matchesAnyDate = matchedStatuses.length > 0;
       const offDutyEveryDate = statuses.every(({ status }) => isOffDutyStatus(status));
       const offDutyAnyDate = offDutyStatuses.length > 0;
+      const matchesMinDays = minMatchingDays ? matchedStatuses.length >= minMatchingDays : false;
+      const offDutyMinDays = minMatchingDays ? offDutyStatuses.length >= minMatchingDays : false;
 
-      const matchesAvailability =
-        dateMatchMode === "all" ? matchesEveryDate : matchesAnyDate;
-      const matchesOffDuty =
-        dateMatchMode === "all" ? offDutyEveryDate : offDutyAnyDate;
+      const matchesAvailability = minMatchingDays
+        ? matchesMinDays
+        : dateMatchMode === "all"
+          ? matchesEveryDate
+          : matchesAnyDate;
+      const matchesOffDuty = minMatchingDays
+        ? offDutyMinDays
+        : dateMatchMode === "all"
+          ? offDutyEveryDate
+          : offDutyAnyDate;
 
       if (!matchesAvailability && !(includeOffDuty && matchesOffDuty)) return null;
 
-      const relevantAvailabilityStatuses = dateMatchMode === "any" ? matchedStatuses : statuses;
-      const relevantOffDutyStatuses = dateMatchMode === "any" ? offDutyStatuses : statuses;
+      const relevantAvailabilityStatuses = minMatchingDays || dateMatchMode === "any"
+        ? matchedStatuses
+        : statuses;
+      const relevantOffDutyStatuses = minMatchingDays || dateMatchMode === "any"
+        ? offDutyStatuses
+        : statuses;
 
       return {
         staff,
@@ -549,8 +573,8 @@ export const executeFindStaffForDates = ({
   if (availabilityCandidates.length === 0 && offDutyCandidates.length === 0) {
     return {
       status: "ok",
-      text: buildNoMatchText(dates, dateMatchMode),
-      copyText: buildNoMatchText(dates, dateMatchMode),
+      text: buildNoMatchText(dates, dateMatchMode, minMatchingDays),
+      copyText: buildNoMatchText(dates, dateMatchMode, minMatchingDays),
     };
   }
 
@@ -558,7 +582,9 @@ export const executeFindStaffForDates = ({
 
   if (availabilityCandidates.length > 0) {
     lines.push(
-      dateMatchMode === "any"
+      minMatchingDays
+        ? `可出勤人員：共 ${availabilityCandidates.length} 位在 ${dates.join("、")} 之中至少 ${minMatchingDays} 天符合條件。`
+        : dateMatchMode === "any"
         ? `可出勤人員：共 ${availabilityCandidates.length} 位在 ${dates.join("、")} 之中至少一天符合條件。`
         : `可出勤人員：共 ${availabilityCandidates.length} 位符合全部 ${dates.length} 天條件。`,
     );
@@ -577,7 +603,9 @@ export const executeFindStaffForDates = ({
   if (offDutyCandidates.length > 0) {
     if (lines.length > 0) lines.push("");
     lines.push(
-      dateMatchMode === "any"
+      minMatchingDays
+        ? `休假 / 休息日：共 ${offDutyCandidates.length} 位在 ${dates.join("、")} 之中至少 ${minMatchingDays} 天不出勤。`
+        : dateMatchMode === "any"
         ? `休假 / 休息日：共 ${offDutyCandidates.length} 位在 ${dates.join("、")} 之中至少一天不出勤。`
         : `休假 / 休息日：共 ${offDutyCandidates.length} 位在全部 ${dates.length} 天都不出勤。`,
     );
@@ -594,6 +622,7 @@ export const executeFindStaffForDates = ({
       title: "查詢結果",
       dates,
       dateMatchMode,
+      minMatchingDays,
       includeOffDuty,
       timeWindowStart: query.timeWindowStart,
       timeWindowEnd: query.timeWindowEnd,

@@ -26,8 +26,11 @@ const StructuredResultCard = ({ result }) => {
   const availableCards = result.staffCards.filter((card) => card.group === "available");
   const offDutyCards = result.staffCards.filter((card) => card.group === "offDuty");
   const summary = result.summary || {};
-  const dateModeText =
-    summary.dateMatchMode === "any" ? "任一天符合" : `全部 ${summary.dateCount || 0} 天符合`;
+  const dateModeText = summary.minMatchingDays
+    ? `至少 ${summary.minMatchingDays} 天符合`
+    : summary.dateMatchMode === "any"
+      ? "任一天符合"
+      : `全部 ${summary.dateCount || 0} 天符合`;
 
   const renderCards = (cards, emptyText) => {
     if (cards.length === 0) {

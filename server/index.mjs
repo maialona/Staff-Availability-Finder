@@ -98,6 +98,9 @@ const QUERY_OBJECT_SCHEMA = {
     requiredMinutes: {
       type: ["integer", "null"],
     },
+    minMatchingDays: {
+      type: ["integer", "null"],
+    },
     dateMatchMode: {
       type: ["string", "null"],
       enum: ["all", "any", null],
@@ -119,6 +122,7 @@ const QUERY_OBJECT_SCHEMA = {
     "timeWindowStart",
     "timeWindowEnd",
     "requiredMinutes",
+    "minMatchingDays",
     "dateMatchMode",
     "includeOffDuty",
     "includePotential",
@@ -749,6 +753,43 @@ const extractRequiredMinutes = (message) => {
   return null;
 };
 
+const CHINESE_NUMBER_MAP = Object.freeze({
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+  十: 10,
+});
+
+const parseSimpleChineseNumber = (value = "") => {
+  const normalized = String(value).trim();
+  if (!normalized) return null;
+  if (/^\d+$/.test(normalized)) return Number(normalized);
+  if (normalized === "十") return 10;
+  if (/^十[一二三四五六七八九]$/.test(normalized)) {
+    return 10 + CHINESE_NUMBER_MAP[normalized.slice(1)];
+  }
+  if (/^[一二三四五六七八九]十$/.test(normalized)) {
+    return CHINESE_NUMBER_MAP[normalized[0]] * 10;
+  }
+  if (/^[一二三四五六七八九]十[一二三四五六七八九]$/.test(normalized)) {
+    return CHINESE_NUMBER_MAP[normalized[0]] * 10 + CHINESE_NUMBER_MAP[normalized[2]];
+  }
+  return CHINESE_NUMBER_MAP[normalized] ?? null;
+};
+
+const extractMinMatchingDays = (message) => {
+  const normalized = normalizeMessageText(message);
+  const match = normalized.match(/至少\s*([一二三四五六七八九十\d]+)\s*天/);
+  if (!match) return null;
+  return parseSimpleChineseNumber(match[1]);
+};
+
 const inferDateMatchMode = (message) => {
   const normalized = normalizeMessageText(message);
 
@@ -788,6 +829,7 @@ export const buildDeterministicQueryHint = (message, context = {}) => {
   const relativeMonthRange = resolveRelativeMonthRange(message, context);
   const relativeDateRange = resolveRelativeDateRange(message, context);
   const requiredMinutes = extractRequiredMinutes(message);
+  const minMatchingDays = extractMinMatchingDays(message);
   const dateMatchMode = inferDateMatchMode(message);
   const includeOffDuty = inferIncludeOffDuty(message);
   const inferredDateRange =
@@ -806,6 +848,7 @@ export const buildDeterministicQueryHint = (message, context = {}) => {
     timeWindowStart: explicitTimeWindow?.start || dayPartWindow?.start || null,
     timeWindowEnd: explicitTimeWindow?.end || dayPartWindow?.end || null,
     requiredMinutes,
+    minMatchingDays,
     dateMatchMode,
     includeOffDuty,
   });
@@ -831,6 +874,10 @@ export const buildDeterministicQueryHint = (message, context = {}) => {
 
   if (requiredMinutes) {
     notes.push(`將時長解析為 ${requiredMinutes} 分鐘`);
+  }
+
+  if (minMatchingDays) {
+    notes.push(`將至少符合天數解析為 ${minMatchingDays} 天`);
   }
 
   if (weekdayValues.length > 0) {
@@ -891,6 +938,8 @@ const applyQueryDefaults = (intent, query, context = {}) => {
 const getMissingFields = (intent, query) => {
   const normalized = normalizeQueryShape(query);
   const hasDates = Array.isArray(normalized.dates) && normalized.dates.length > 0;
+  const hasDateRange =
+    Boolean(normalized.dateRangeStart) && Boolean(normalized.dateRangeEnd);
   const hasWeekdays =
     Array.isArray(normalized.weekdayValues) && normalized.weekdayValues.length > 0;
   const hasStaff =
@@ -900,7 +949,7 @@ const getMissingFields = (intent, query) => {
 
   if (intent === "find_staff_for_dates") {
     const missing = [];
-    if (!hasDates) missing.push("dates");
+    if (!hasDates && !hasDateRange) missing.push("dates");
     if (!hasTimeRange) missing.push("timeWindow");
     return missing;
   }
@@ -1039,6 +1088,7 @@ const buildPrompt = ({ message, context, deterministicHint }) => `
 12. 若語意是「每一天都要符合 / 同時符合 / 都有空」，query.dateMatchMode = "all"。
 13. 若語意是「其中一天即可 / 任一天可以 / 有一天有空」，query.dateMatchMode = "any"。
 14. 若語意提到休假、休息日也要列出，可設定 query.includeOffDuty = true。
+14.5. 若語意是「至少三天 / 至少 N 天符合」，請填 query.minMatchingDays。
 15. 在 fill_missing_fields 模式下：
    - 你要沿用上一題的 intent 與已知欄位。
    - 使用者這一句通常只是在補缺欄位，不要把它硬判成全新查詢。

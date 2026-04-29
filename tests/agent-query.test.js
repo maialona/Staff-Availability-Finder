@@ -73,6 +73,19 @@ test("deterministic parser resolves current week range for weekly pattern", () =
   assert.equal(hint.query.requiredMinutes, 30);
 });
 
+test("deterministic parser resolves weekly range with minimum matching days", () => {
+  const hint = buildDeterministicQueryHint("列出本周有至少三天下午都是空班的人", {
+    today: "2026-04-29",
+  });
+
+  assert.equal(hint.intent, "find_staff_for_dates");
+  assert.equal(hint.query.dateRangeStart, "2026-04-27");
+  assert.equal(hint.query.dateRangeEnd, "2026-05-03");
+  assert.equal(hint.query.timeWindowStart, "12:00");
+  assert.equal(hint.query.timeWindowEnd, "18:00");
+  assert.equal(hint.query.minMatchingDays, 3);
+});
+
 test("deterministic parser resolves weekday range inside current week", () => {
   const hint = buildDeterministicQueryHint("這週二到四下午誰有空", {
     today: "2026-04-29",
@@ -315,6 +328,44 @@ test("weekly pattern execution uses full data range defaults and finds afternoon
   assert.equal(result.structuredResult.staffCards.some((card) => card.name === "Bob"), true);
   assert.equal(result.structuredResult.staffCards[0].matchCount, 3);
   assert.equal(result.structuredResult.staffCards[0].hasPotential, false);
+});
+
+test("date query supports minimum matching days across a date range", () => {
+  const staffData = [
+    { id: "1", name: "Alice", staffKey: "alice" },
+    { id: "2", name: "Bob", staffKey: "bob" },
+  ];
+
+  const scheduleData = [
+    createScheduleRow("2026-04-27", "Alice", "alice", "12:00~18:00 個案A"),
+    createScheduleRow("2026-04-28", "Alice", "alice", "12:00~18:00 個案A"),
+    createScheduleRow("2026-04-29", "Alice", "alice", "12:00~18:00 個案A"),
+    createScheduleRow("2026-04-30", "Alice", "alice", "09:00~10:00 個案A"),
+    createScheduleRow("2026-05-01", "Bob", "bob", "12:00~18:00 個案B"),
+    createScheduleRow("2026-05-02", "Bob", "bob", "12:00~18:00 個案B"),
+  ];
+
+  const result = executeFindStaffForDates({
+    query: {
+      dateRangeStart: "2026-04-27",
+      dateRangeEnd: "2026-05-02",
+      timeWindowStart: "12:00",
+      timeWindowEnd: "18:00",
+      minMatchingDays: 3,
+    },
+    scheduleData,
+    staffData,
+    bufferBuffer: 0,
+    caseSettings: {},
+  });
+
+  assert.equal(result.status, "ok");
+  assert.match(result.text, /至少 3 天符合條件/);
+  assert.equal(result.structuredResult.summary.minMatchingDays, 3);
+  assert.equal(result.structuredResult.summary.totalMatches >= 1, true);
+  const aliceCard = result.structuredResult.staffCards.find((card) => card.name === "Alice");
+  assert.equal(Boolean(aliceCard), true);
+  assert.equal(aliceCard.matchCount >= 3, true);
 });
 
 test("date query builds structured result for any-match with potential staff", () => {
