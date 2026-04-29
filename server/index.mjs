@@ -738,7 +738,9 @@ const extractRequiredMinutes = (message) => {
     return 30;
   }
 
-  const minuteMatch = normalized.match(/(\d+)\s*(?:分鐘|分鍾|mins?|minutes?)/i);
+  const minuteMatch = normalized.match(
+    /(\d+)\s*(?:分鐘|分鍾|分钟|分(?!頁|號|組|之)|mins?|minutes?)/i,
+  );
   if (minuteMatch) return Number(minuteMatch[1]);
 
   const hourMatch = normalized.match(/(\d+)\s*(?:小時|小时|hrs?|hours?)/i);

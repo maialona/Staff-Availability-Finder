@@ -34,6 +34,19 @@ test("deterministic parser resolves current-day afternoon query", () => {
   assert.equal(hint.query.requiredMinutes, 30);
 });
 
+test("deterministic parser treats 30分 the same as 30分鐘", () => {
+  const shortForm = buildDeterministicQueryHint("今天下午誰有30分的空檔", {
+    today: "2026-04-29",
+  });
+  const longForm = buildDeterministicQueryHint("今天下午誰有30分鐘的空檔", {
+    today: "2026-04-29",
+  });
+
+  assert.equal(shortForm.intent, "find_staff_for_dates");
+  assert.equal(shortForm.query.requiredMinutes, 30);
+  assert.deepEqual(shortForm.query, longForm.query);
+});
+
 test("deterministic parser resolves compact weekday pattern", () => {
   const hint = buildDeterministicQueryHint("二三五下午有30分鐘的空班", {
     today: "2026-04-29",
