@@ -44,7 +44,9 @@ import {
   loadXLSX,
   parseCaseScheduleWorkbook,
   parseOrgWorkbook,
+  normalizeCaseScheduleData,
 } from "./utils/workbook";
+import { buildMovePlans } from "./utils/move-plans";
 import { CaseScheduleView, StatsView } from "./components/dashboard-views";
 import { AgentSidebar } from "./components/agent-sidebar";
 import {
@@ -1198,7 +1200,7 @@ function App() {
               ...DEFAULT_PERSISTED_STATE,
               ...persistedState,
               orgs: dbOrgs,
-              caseScheduleData: dbCaseScheduleData,
+              caseScheduleData: normalizeCaseScheduleData(dbCaseScheduleData),
             }
           : legacyState;
 
@@ -1247,7 +1249,7 @@ function App() {
           sourceState.advancedWeekRules ?? DEFAULT_PERSISTED_STATE.advancedWeekRules,
         );
         setCaseSettings(sourceState.caseSettings ?? {});
-        setCaseScheduleData(sourceState.caseScheduleData || []);
+        setCaseScheduleData(normalizeCaseScheduleData(sourceState.caseScheduleData));
         setCaseScheduleFileName(sourceState.caseScheduleFileName ?? "");
       } catch (loadError) {
         console.error("App hydration failed:", loadError);
@@ -1432,7 +1434,9 @@ function App() {
           type: "array",
           cellDates: true,
         });
-        const clients = parseCaseScheduleWorkbook(workbook, xlsx);
+        const clients = normalizeCaseScheduleData(
+          parseCaseScheduleWorkbook(workbook, xlsx),
+        );
         if (!clients.length)
           throw new Error("找不到任何個案資料，請確認工作表名稱為案主姓名。");
         setCaseScheduleData(clients);
@@ -1889,6 +1893,46 @@ function App() {
   // Unified active filter result
   const activeFilterResult = filteredStaffList || filteredByService;
   const activeWeeklyFilterResult = filteredWeeklyList || filteredByServiceWeekly;
+
+  const activeMovePlans = useMemo(() => {
+    const isMovePlanningMode =
+      viewMode !== "week" &&
+      filterMode === "manual" &&
+      selectedDate &&
+      filterStartTime &&
+      filterEndTime &&
+      activeFilterResult &&
+      activeFilterResult.available.length === 0 &&
+      activeFilterResult.potential.length > 0;
+
+    if (!isMovePlanningMode) return [];
+
+    return buildMovePlans({
+      dateStr: selectedDate,
+      targetStartTime: filterStartTime,
+      targetEndTime: filterEndTime,
+      dayAvailability: activeFilterResult.potential,
+      bufferMinutes: bufferBuffer,
+      caseSettings,
+    });
+  }, [
+    viewMode,
+    filterMode,
+    selectedDate,
+    filterStartTime,
+    filterEndTime,
+    activeFilterResult,
+    bufferBuffer,
+    caseSettings,
+  ]);
+
+  const showMovePlanFallback =
+    viewMode !== "week" &&
+    filterMode === "manual" &&
+    activeFilterResult &&
+    activeFilterResult.available.length === 0 &&
+    activeFilterResult.potential.length > 0 &&
+    activeMovePlans.length === 0;
 
   const activeOrgIds = useMemo(() => {
     if (selectedOrgIds.size > 0) return new Set(selectedOrgIds);
@@ -3199,6 +3243,91 @@ function App() {
                   </div>
                 )}
 
+                {activeMovePlans.length > 0 && (
+                  <div className="space-y-3 pt-4 border-t border-slate-100">
+                    <div className="flex items-center gap-2 text-brand-slate font-bold text-sm">
+                      <Sparkles className="w-4 h-4 text-brand-coral" />
+                      最佳挪移方案 ({activeMovePlans.length})
+                      <span className="font-normal text-slate-400 text-xs">
+                        (只顯示單人、單案、同日內的建議)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {activeMovePlans.map((plan) => (
+                        <Card
+                          key={`${plan.staff?.staffKey || plan.staff?.name}-${plan.movedCaseName}-${plan.direction}-${plan.proposedStart.getTime()}`}
+                          className={cn(
+                            "p-4 flex flex-col gap-3 hover:shadow-md transition-shadow border-l-4",
+                            plan.score === 1
+                              ? "border-l-brand-coral"
+                              : "border-l-amber-400",
+                          )}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <h3 className="font-bold text-slate-900 text-base flex items-center gap-1">
+                                <OrgDot staff={plan.staff} orgs={orgs} />
+                                {plan.staff?.name}
+                              </h3>
+                              <p className="text-xs text-slate-400 mt-1">
+                                {plan.staff?.org || "未指定機構"}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {plan.score === 1 && (
+                                <span className="px-2 py-0.5 rounded-full bg-brand-coral/10 text-brand-coral text-[10px] font-bold">
+                                  最佳
+                                </span>
+                              )}
+                              <span
+                                className={cn(
+                                  "px-2 py-0.5 rounded-full text-[10px] font-bold",
+                                  plan.direction === "early"
+                                    ? "bg-emerald-50 text-emerald-600"
+                                    : "bg-amber-50 text-amber-700",
+                                )}
+                              >
+                                {plan.direction === "early" ? "提早" : "延後"}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2 text-[11px] text-slate-600">
+                            <div className="rounded-xl bg-slate-50 border border-slate-100 p-3 space-y-1.5">
+                              <div className="font-bold text-brand-slate">
+                                受影響個案: {plan.movedCaseName}
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span>原時段</span>
+                                <span className="font-mono text-slate-700">
+                                  {format(plan.originalStart, "HH:mm")}-
+                                  {format(plan.originalEnd, "HH:mm")}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span>建議新時段</span>
+                                <span className="font-mono text-slate-700">
+                                  {format(plan.proposedStart, "HH:mm")}-
+                                  {format(plan.proposedEnd, "HH:mm")}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span>移動分鐘數</span>
+                                <span className="font-bold text-brand-slate">
+                                  {plan.moveMinutes} 分鐘
+                                </span>
+                              </div>
+                            </div>
+                            <p className="rounded-xl bg-brand-lavender/40 px-3 py-2 text-slate-600 leading-5">
+                              {plan.explanation}
+                            </p>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* 2. Potential Matches (Flexible) */}
                 {activeFilterResult.potential.length > 0 && (
                   <div className="space-y-3 pt-4 border-t border-slate-100">
@@ -3209,6 +3338,11 @@ function App() {
                         (案主標記為可提早或延後)
                       </span>
                     </div>
+                    {showMovePlanFallback && (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                        此人可調整，但無法在單次挪移內騰出完整目標時段。
+                      </div>
+                    )}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {activeFilterResult.potential.map((item, idx) => (
                         <Card

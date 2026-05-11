@@ -8,6 +8,7 @@ import {
   Download,
   BarChart3,
   LayoutGrid,
+  Search,
 } from "lucide-react";
 
 const SortBtn = ({ value, label, sortBy, setSortBy, cn }) => (
@@ -620,7 +621,16 @@ export const CaseScheduleView = ({
   const Label = labelComponent;
   const [search, setSearch] = React.useState("");
 
-  const filtered = caseScheduleData.filter((client) =>
+  const normalizedClients = Array.isArray(caseScheduleData)
+    ? caseScheduleData
+        .map((client) => ({
+          clientName: String(client?.clientName || "").trim(),
+          records: Array.isArray(client?.records) ? client.records : [],
+        }))
+        .filter((client) => client.clientName)
+    : [];
+
+  const filtered = normalizedClients.filter((client) =>
     client.clientName.toLowerCase().includes(search.toLowerCase()),
   );
 
@@ -669,7 +679,7 @@ export const CaseScheduleView = ({
 
       {!caseScheduleLoading &&
         !caseScheduleError &&
-        caseScheduleData.length === 0 && (
+        normalizedClients.length === 0 && (
           <Card className="p-16 flex flex-col items-center text-center border-dashed border-2 border-slate-200 bg-slate-50/50 shadow-none">
             <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-4">
               <FileSpreadsheet className="w-8 h-8 text-slate-400" />
@@ -684,7 +694,7 @@ export const CaseScheduleView = ({
           </Card>
         )}
 
-      {caseScheduleData.length > 0 && (
+      {normalizedClients.length > 0 && (
         <>
           <div className="relative max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />

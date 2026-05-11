@@ -3,6 +3,37 @@ import { createScopedStaffKey } from "./persistence";
 
 export const loadXLSX = () => import("xlsx");
 
+export function normalizeCaseScheduleData(clients = []) {
+  if (!Array.isArray(clients)) return [];
+
+  return clients
+    .map((client) => {
+      const clientName = String(client?.clientName || "").trim();
+      const sheetName = String(client?.sheetName || clientName).trim();
+      const records = Array.isArray(client?.records)
+        ? client.records
+            .map((record) => ({
+              服務日期: record?.["服務日期"] ?? "",
+              服務人員: String(record?.["服務人員"] || "").trim(),
+              服務時間: String(record?.["服務時間"] || "").trim(),
+            }))
+            .filter(
+              (record) =>
+                record["服務日期"] || record["服務人員"] || record["服務時間"],
+            )
+        : [];
+
+      if (!clientName) return null;
+
+      return {
+        clientName,
+        sheetName,
+        records,
+      };
+    })
+    .filter(Boolean);
+}
+
 export function parseCaseScheduleWorkbook(workbook, xlsx) {
   const clients = [];
 
@@ -106,7 +137,7 @@ export function parseCaseScheduleWorkbook(workbook, xlsx) {
     clients.push({ clientName, sheetName, records });
   });
 
-  return clients;
+  return normalizeCaseScheduleData(clients);
 }
 
 export function parseOrgWorkbook({
