@@ -2,6 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveCrossRegionDistancesWithFileCache } from "./cross-region.mjs";
 
 const loadEnvFile = (filePath) => {
   if (!fs.existsSync(filePath)) return;
@@ -1390,6 +1391,39 @@ const server = http.createServer(async (req, res) => {
       });
     } finally {
       res.end();
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/cross-region/distances") {
+    try {
+      const body = await readJsonBody(req);
+      const addresses = Array.isArray(body?.addresses) ? body.addresses : [];
+      const pairs = Array.isArray(body?.pairs) ? body.pairs : [];
+
+      if (addresses.length === 0 || pairs.length === 0) {
+        sendJson(res, 400, {
+          status: "error",
+          error: "Missing addresses or pairs",
+        });
+        return;
+      }
+
+      const result = await resolveCrossRegionDistancesWithFileCache({
+        addresses,
+        pairs,
+      });
+
+      sendJson(res, 200, {
+        status: "ok",
+        results: result.results,
+        geocodes: result.geocodes,
+      });
+    } catch (error) {
+      sendJson(res, 500, {
+        status: "error",
+        error: error.message || "Unknown distance server error",
+      });
     }
     return;
   }

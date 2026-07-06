@@ -9,6 +9,10 @@ import {
   BarChart3,
   LayoutGrid,
   Search,
+  Route,
+  MapPin,
+  AlertTriangle,
+  CheckCircle2,
 } from "lucide-react";
 
 const SortBtn = ({ value, label, sortBy, setSortBy, cn }) => (
@@ -597,6 +601,476 @@ export const StatsView = ({
             </table>
           </div>
         </Card>
+      )}
+    </div>
+  );
+};
+
+const formatDistance = (value) =>
+  Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)} km` : "-";
+
+const formatDuration = (seconds) => {
+  if (!Number.isFinite(Number(seconds))) return "";
+  const minutes = Math.round(Number(seconds) / 60);
+  return `${minutes} 分`;
+};
+
+const crossRegionStatusMeta = {
+  qualified: { label: "符合", className: "bg-emerald-100 text-emerald-700" },
+  "below-threshold": { label: "未達", className: "bg-slate-100 text-slate-600" },
+  "same-client": { label: "同案", className: "bg-blue-100 text-blue-700" },
+  "same-address": { label: "同址", className: "bg-blue-100 text-blue-700" },
+  "missing-address": { label: "缺地址", className: "bg-amber-100 text-amber-700" },
+  failed: { label: "計算失敗", className: "bg-red-100 text-red-700" },
+  pending: { label: "待計算", className: "bg-slate-100 text-slate-500" },
+};
+
+const formatAddress = (address, fallback = "") =>
+  address?.displayAddress || address?.geocodeAddress || fallback || "-";
+
+export const CrossRegionBonusView = ({
+  roster,
+  rosterLoading,
+  rosterError,
+  onUpload,
+  pairData,
+  report,
+  staffOptions = [],
+  selectedStaffKey = "",
+  onSelectStaff,
+  staffSearch = "",
+  onStaffSearchChange,
+  selectedPairData,
+  selectedStaffDetail,
+  distanceLoading,
+  distanceError,
+  cardComponent,
+}) => {
+  const Card = cardComponent;
+  const eligibleStaff = report.staffResults.filter((item) => item.eligible);
+  const pendingStaff = report.staffResults.filter((item) => !item.eligible);
+  const unmatched = pairData.unmatchedClients || [];
+  const failedDistances = report.failedDistances || [];
+  const selectedStaff = staffOptions.find((staff) => staff.staffKey === selectedStaffKey);
+  const selectedStaffReport = report.staffResults.find(
+    (staff) => staff.staffKey === selectedStaffKey,
+  );
+  const filteredStaffOptions = staffOptions
+    .filter((staff) => {
+      const keyword = String(staffSearch || "").trim().toLowerCase();
+      if (!keyword) return true;
+      return `${staff.name} ${staff.org}`.toLowerCase().includes(keyword);
+    })
+    .slice(0, 20);
+  const detailRows = selectedStaffDetail?.rows || [];
+  const detailSummary = selectedStaffDetail?.summary || {
+    total: 0,
+    qualified: 0,
+    belowThreshold: 0,
+    failed: 0,
+    skipped: 0,
+    pending: 0,
+  };
+  const selectedTransferCount =
+    (selectedPairData?.pairs?.length || 0) +
+    (selectedPairData?.skipped?.sameClient?.length || 0) +
+    (selectedPairData?.skipped?.sameAddress?.length || 0) +
+    (selectedPairData?.skipped?.missingAddress?.length || 0);
+
+  return (
+    <div className="space-y-6 anim-fade-up anim-delay-2">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-brand-slate">跨區獎金</h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            判定同日相鄰兩案行車距離超過 15 公里，且連續四周每周至少一次。
+          </p>
+        </div>
+        <label
+          htmlFor="client-roster-upload"
+          className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-brand-coral text-white text-sm font-bold rounded-xl shadow hover:bg-brand-coral/90 transition-colors"
+        >
+          <Upload className="w-4 h-4" />
+          上傳個案清冊
+          <input
+            id="client-roster-upload"
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={onUpload}
+          />
+        </label>
+      </div>
+
+      {rosterLoading && (
+        <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+          <div className="w-5 h-5 border-2 border-brand-coral border-t-transparent rounded-full animate-spin shrink-0" />
+          <span className="text-sm text-slate-600 font-medium">正在解析個案清冊...</span>
+        </div>
+      )}
+
+      {rosterError && (
+        <div className="flex items-center gap-3 p-4 bg-red-50 rounded-2xl border border-red-100">
+          <XCircle className="w-5 h-5 text-red-500 shrink-0" />
+          <span className="text-sm text-red-700 font-medium">{rosterError}</span>
+        </div>
+      )}
+
+      {!roster && !rosterLoading && (
+        <Card className="p-16 flex flex-col items-center text-center border-dashed border-2 border-slate-200 bg-slate-50/50 shadow-none">
+          <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+            <FileSpreadsheet className="w-8 h-8 text-slate-400" />
+          </div>
+          <h3 className="text-base font-semibold text-slate-700 mb-1">
+            請上傳個案清冊
+          </h3>
+          <p className="text-sm text-slate-400 max-w-sm">
+            系統會讀取 AO:AS 的通訊地址，清洗後比對班表中的個案姓名。
+          </p>
+        </Card>
+      )}
+
+      {roster && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {[
+              { label: "清冊個案", value: roster.clients.length, unit: "位" },
+              { label: "相鄰案轉場", value: pairData.pairs.length, unit: "筆" },
+              { label: "符合服務員", value: eligibleStaff.length, unit: "位" },
+              { label: "未匹配個案", value: unmatched.length, unit: "筆" },
+            ].map((item) => (
+              <Card key={item.label} className="p-5 text-center">
+                <div className="text-2xl font-bold text-brand-slate">
+                  {item.value}
+                  <span className="text-sm font-medium text-slate-400 ml-1">
+                    {item.unit}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-400 font-medium mt-1">
+                  {item.label}
+                </div>
+              </Card>
+            ))}
+          </div>
+
+          <Card className="p-5 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-end gap-4">
+              <div className="flex-1">
+                <label className="text-sm font-bold text-brand-slate flex items-center gap-2 mb-2">
+                  <Search className="w-4 h-4 text-brand-coral" />
+                  指定服務員
+                </label>
+                <input
+                  value={staffSearch}
+                  onChange={(event) => onStaffSearchChange?.(event.target.value)}
+                  placeholder="輸入服務員姓名，例如：郭承翰"
+                  className="w-full h-11 rounded-xl border border-slate-200 bg-slate-50/70 px-4 text-sm outline-none focus:border-brand-coral focus:ring-2 focus:ring-brand-coral/10"
+                />
+              </div>
+              <div className="lg:w-72 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
+                <div className="text-xs text-slate-400 font-bold mb-1">目前查看</div>
+                <div className="text-sm font-bold text-brand-slate">
+                  {selectedStaff ? selectedStaff.name : "尚未指定服務員"}
+                </div>
+                {selectedStaff?.org && (
+                  <div className="text-xs text-slate-400 mt-0.5">{selectedStaff.org}</div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto pr-1">
+              {filteredStaffOptions.map((staff) => (
+                <button
+                  key={staff.staffKey}
+                  type="button"
+                  onClick={() => onSelectStaff?.(staff.staffKey)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${
+                    selectedStaffKey === staff.staffKey
+                      ? "bg-brand-coral text-white border-brand-coral"
+                      : "bg-white text-slate-600 border-slate-200 hover:border-brand-coral/50"
+                  }`}
+                >
+                  {staff.name}
+                  {staff.org ? ` · ${staff.org}` : ""}
+                </button>
+              ))}
+              {filteredStaffOptions.length === 0 && (
+                <span className="text-sm text-slate-400">找不到符合的服務員</span>
+              )}
+            </div>
+          </Card>
+
+          {distanceLoading && (
+            <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-2xl border border-blue-100">
+              <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin shrink-0" />
+              <span className="text-sm text-blue-700 font-medium">
+                正在呼叫 Google Maps 計算行車距離...
+              </span>
+            </div>
+          )}
+
+          {distanceError && (
+            <div className="flex items-start gap-3 p-4 bg-amber-50 rounded-2xl border border-amber-100">
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm text-amber-700 font-bold">距離尚未完成計算</p>
+                <p className="text-sm text-amber-700 mt-1">{distanceError}</p>
+              </div>
+            </div>
+          )}
+
+          {selectedStaffKey && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                {[
+                  {
+                    label: "資格",
+                    value: selectedStaffReport?.eligible ? "符合" : "未符合",
+                    tone: selectedStaffReport?.eligible ? "text-emerald-600" : "text-slate-500",
+                  },
+                  { label: "符合周數", value: `${selectedStaffReport?.weeks?.length || 0} 周` },
+                  { label: "跨區筆數", value: `${detailSummary.qualified} 筆` },
+                  { label: "全部轉場", value: `${selectedTransferCount || detailSummary.total} 筆` },
+                  { label: "略過/失敗", value: `${detailSummary.skipped}/${detailSummary.failed} 筆` },
+                ].map((item) => (
+                  <Card key={item.label} className="p-4 text-center">
+                    <div className={`text-xl font-bold ${item.tone || "text-brand-slate"}`}>
+                      {item.value}
+                    </div>
+                    <div className="text-xs text-slate-400 font-medium mt-1">
+                      {item.label}
+                    </div>
+                  </Card>
+                ))}
+              </div>
+
+              <Card className="p-5 overflow-hidden">
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <h3 className="text-base font-bold text-brand-slate">
+                    {selectedStaff?.name || "指定服務員"}轉場明細
+                  </h3>
+                  <span className="text-xs text-slate-400">
+                    依日期與服務開始時間排序
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border-collapse min-w-[980px]">
+                    <thead>
+                      <tr className="bg-slate-50">
+                        <th className="border border-slate-200 px-3 py-2 text-left">日期</th>
+                        <th className="border border-slate-200 px-3 py-2 text-left">前案</th>
+                        <th className="border border-slate-200 px-3 py-2 text-left">後案</th>
+                        <th className="border border-slate-200 px-3 py-2 text-left">前案地址</th>
+                        <th className="border border-slate-200 px-3 py-2 text-left">後案地址</th>
+                        <th className="border border-slate-200 px-3 py-2 text-right">距離</th>
+                        <th className="border border-slate-200 px-3 py-2 text-right">車程</th>
+                        <th className="border border-slate-200 px-3 py-2 text-center">狀態</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detailRows.map((row) => {
+                        const meta = crossRegionStatusMeta[row.status] || crossRegionStatusMeta.pending;
+                        return (
+                          <tr key={row.id} className="hover:bg-slate-50">
+                            <td className="border border-slate-200 px-3 py-2 font-mono whitespace-nowrap">
+                              {row.date}
+                            </td>
+                            <td className="border border-slate-200 px-3 py-2">
+                              <div className="font-mono text-slate-500">
+                                {row.fromStartTime}-{row.fromEndTime}
+                              </div>
+                              <div className="font-bold text-slate-700">{row.fromCaseName}</div>
+                            </td>
+                            <td className="border border-slate-200 px-3 py-2">
+                              <div className="font-mono text-slate-500">
+                                {row.toStartTime}-{row.toEndTime}
+                              </div>
+                              <div className="font-bold text-slate-700">{row.toCaseName}</div>
+                            </td>
+                            <td className="border border-slate-200 px-3 py-2 text-slate-500">
+                              {formatAddress(row.fromAddress, row.originAddress)}
+                            </td>
+                            <td className="border border-slate-200 px-3 py-2 text-slate-500">
+                              {formatAddress(row.toAddress, row.destinationAddress)}
+                            </td>
+                            <td className="border border-slate-200 px-3 py-2 text-right font-mono">
+                              {row.distanceKm == null ? "-" : formatDistance(row.distanceKm)}
+                            </td>
+                            <td className="border border-slate-200 px-3 py-2 text-right font-mono">
+                              {formatDuration(row.durationSeconds)}
+                            </td>
+                            <td className="border border-slate-200 px-3 py-2 text-center">
+                              <span className={`px-2 py-0.5 rounded-full font-bold ${meta.className}`}>
+                                {meta.label}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {detailRows.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={8}
+                            className="border border-slate-200 px-3 py-8 text-center text-slate-400"
+                          >
+                            這位服務員目前沒有同日相鄰服務轉場
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {!selectedStaffKey && (
+            <Card className="p-8 text-center border-dashed border-2 border-slate-200 bg-slate-50/50 shadow-none">
+              <Search className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+              <p className="text-sm font-semibold text-slate-600">
+                請先指定服務員，系統才會計算該員的跨區距離明細
+              </p>
+            </Card>
+          )}
+
+          {selectedStaffKey && eligibleStaff.length > 0 ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-brand-slate font-bold text-sm">
+                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                符合領取資格
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {eligibleStaff.map((staff) => (
+                  <Card key={staff.staffKey} className="p-5 border-l-4 border-l-emerald-500">
+                    <div className="flex items-start justify-between gap-3 mb-4">
+                      <div>
+                        <h3 className="font-bold text-brand-slate text-base">
+                          {staff.staffName}
+                        </h3>
+                        {staff.staffOrg && (
+                          <p className="text-xs text-slate-400 mt-1">{staff.staffOrg}</p>
+                        )}
+                      </div>
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">
+                        {staff.weeks.length} 周
+                      </span>
+                    </div>
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                      {staff.qualifyingLegs.map((leg) => (
+                        <div
+                          key={leg.id}
+                          className="rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-bold text-slate-700">
+                              {leg.date} {leg.fromEndTime} → {leg.toStartTime}
+                            </span>
+                            <span className="font-bold text-brand-coral">
+                              {formatDistance(leg.distanceKm)}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex items-center gap-2 text-slate-500">
+                            <Route className="w-3.5 h-3.5" />
+                            <span>
+                              {leg.fromCaseName} → {leg.toCaseName}
+                              {leg.durationSeconds
+                                ? `，約 ${formatDuration(leg.durationSeconds)}`
+                                : ""}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          ) : selectedStaffKey ? (
+            <Card className="p-8 text-center border-dashed border-2 border-slate-200 bg-slate-50/50 shadow-none">
+              <Route className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+              <p className="text-sm font-semibold text-slate-600">
+                目前沒有服務員符合連續四周跨區條件
+              </p>
+            </Card>
+          ) : null}
+
+          {pendingStaff.length > 0 && (
+            <Card className="p-5 overflow-hidden">
+              <h3 className="text-base font-bold text-brand-slate mb-4">
+                未達連續四周但有跨區紀錄
+              </h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse min-w-[640px]">
+                  <thead>
+                    <tr>
+                      <th className="border border-slate-200 px-3 py-2 text-left">服務員</th>
+                      <th className="border border-slate-200 px-3 py-2 text-center">符合周數</th>
+                      <th className="border border-slate-200 px-3 py-2 text-left">日期</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingStaff.map((staff) => (
+                      <tr key={staff.staffKey} className="hover:bg-slate-50">
+                        <td className="border border-slate-200 px-3 py-2 font-medium">
+                          {staff.staffName}
+                        </td>
+                        <td className="border border-slate-200 px-3 py-2 text-center">
+                          {staff.weeks.length}
+                        </td>
+                        <td className="border border-slate-200 px-3 py-2 text-slate-500">
+                          {staff.qualifyingLegs.map((leg) => leg.date).join("、")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
+          {(unmatched.length > 0 || failedDistances.length > 0) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {unmatched.length > 0 && (
+                <Card className="p-5">
+                  <h3 className="text-base font-bold text-brand-slate mb-3">
+                    未匹配個案
+                  </h3>
+                  <div className="flex flex-wrap gap-2">
+                    {unmatched.slice(0, 60).map((item) => (
+                      <span
+                        key={`${item.caseName}-${item.normalizedName}`}
+                        className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-medium"
+                      >
+                        {item.caseName}
+                      </span>
+                    ))}
+                    {unmatched.length > 60 && (
+                      <span className="text-xs text-slate-400">
+                        另有 {unmatched.length - 60} 筆
+                      </span>
+                    )}
+                  </div>
+                </Card>
+              )}
+
+              {failedDistances.length > 0 && (
+                <Card className="p-5">
+                  <h3 className="text-base font-bold text-brand-slate mb-3">
+                    距離計算失敗
+                  </h3>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {failedDistances.slice(0, 30).map((item) => (
+                      <div key={item.id} className="text-xs text-slate-600">
+                        <MapPin className="w-3.5 h-3.5 inline mr-1 text-slate-400" />
+                        {item.date} {item.fromCaseName} → {item.toCaseName}
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

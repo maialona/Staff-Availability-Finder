@@ -23,6 +23,7 @@ import {
   List,
   Search,
   BarChart2,
+  Route,
   ChevronLeft,
   ChevronRight,
   Sparkles,
@@ -47,7 +48,19 @@ import {
   normalizeCaseScheduleData,
 } from "./utils/workbook";
 import { buildMovePlans } from "./utils/move-plans";
-import { CaseScheduleView, StatsView } from "./components/dashboard-views";
+import {
+  CaseScheduleView,
+  CrossRegionBonusView,
+  StatsView,
+} from "./components/dashboard-views";
+import {
+  buildCrossRegionBonusReport,
+  buildCrossRegionPairs,
+  buildCrossRegionStaffDetail,
+  filterCrossRegionPairDataByStaff,
+  getUniqueAddressesAndPairs,
+  parseClientRosterWorkbook,
+} from "./utils/cross-region";
 import { AgentSidebar } from "./components/agent-sidebar";
 import {
   TimelineBar,
@@ -1171,6 +1184,16 @@ function App() {
   const [caseScheduleFileName, setCaseScheduleFileName] = useState(
     DEFAULT_PERSISTED_STATE.caseScheduleFileName,
   );
+  const [clientRoster, setClientRoster] = useState(null);
+  const [clientRosterLoading, setClientRosterLoading] = useState(false);
+  const [clientRosterError, setClientRosterError] = useState(null);
+  const [crossRegionDistances, setCrossRegionDistances] = useState({});
+  const [crossRegionLoading, setCrossRegionLoading] = useState(false);
+  const [crossRegionError, setCrossRegionError] = useState(null);
+  const [crossRegionPairKey, setCrossRegionPairKey] = useState("");
+  const [selectedCrossRegionStaffKey, setSelectedCrossRegionStaffKey] =
+    useState("");
+  const [crossRegionStaffSearch, setCrossRegionStaffSearch] = useState("");
 
   React.useEffect(() => {
     let isCancelled = false;
@@ -1457,6 +1480,171 @@ function App() {
     };
     reader.readAsArrayBuffer(file);
   };
+
+  const handleClientRosterUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setClientRosterLoading(true);
+    setClientRosterError(null);
+    setCrossRegionError(null);
+    setCrossRegionDistances({});
+    setCrossRegionPairKey("");
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const xlsx = await loadXLSX();
+        const workbook = xlsx.read(evt.target.result, {
+          type: "array",
+          cellDates: true,
+        });
+        const roster = parseClientRosterWorkbook(workbook, xlsx, file.name);
+        if (!roster.clients.length) {
+          throw new Error("找不到含通訊地址的個案資料，請確認清冊欄位 AO:AS。");
+        }
+        setClientRoster(roster);
+      } catch (err) {
+        setClientRoster(null);
+        setClientRosterError("解析失敗: " + (err.message || "未知錯誤"));
+      } finally {
+        setClientRosterLoading(false);
+        e.target.value = "";
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const crossRegionPairData = useMemo(() => {
+    return buildCrossRegionPairs({
+      scheduleData: activeScheduleData,
+      staffData: activeStaffData,
+      rosterClients: clientRoster?.clients || [],
+    });
+  }, [activeScheduleData, activeStaffData, clientRoster]);
+
+  const crossRegionStaffOptions = useMemo(() => {
+    return activeStaffData
+      .map((staff) => ({
+        staffKey: staff.staffKey || staff.id || staff.name,
+        name: staff.name || staff.staffName || "",
+        org: staff.org || "",
+      }))
+      .filter((staff) => staff.staffKey && staff.name)
+      .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+  }, [activeStaffData]);
+
+  const selectedCrossRegionPairData = useMemo(() => {
+    if (!selectedCrossRegionStaffKey) {
+      return {
+        pairs: [],
+        unmatchedClients: crossRegionPairData.unmatchedClients || [],
+        skipped: { sameClient: [], sameAddress: [], missingAddress: [] },
+      };
+    }
+    return filterCrossRegionPairDataByStaff(
+      crossRegionPairData,
+      selectedCrossRegionStaffKey,
+    );
+  }, [crossRegionPairData, selectedCrossRegionStaffKey]);
+
+  const crossRegionCurrentPairKey = useMemo(
+    () =>
+      `${selectedCrossRegionStaffKey}::${selectedCrossRegionPairData.pairs
+        .map((pair) => pair.id)
+        .sort()
+        .join("|")}`,
+    [selectedCrossRegionPairData.pairs, selectedCrossRegionStaffKey],
+  );
+
+  const crossRegionReport = useMemo(
+    () =>
+      buildCrossRegionBonusReport({
+        pairs: selectedCrossRegionPairData.pairs,
+        distanceResults: crossRegionDistances,
+      }),
+    [crossRegionDistances, selectedCrossRegionPairData.pairs],
+  );
+
+  const selectedCrossRegionDetail = useMemo(() => {
+    if (!selectedCrossRegionStaffKey) return null;
+    return buildCrossRegionStaffDetail({
+      staffKey: selectedCrossRegionStaffKey,
+      pairs: selectedCrossRegionPairData.pairs,
+      skipped: selectedCrossRegionPairData.skipped,
+      distanceResults: crossRegionDistances,
+    });
+  }, [
+    crossRegionDistances,
+    selectedCrossRegionPairData.pairs,
+    selectedCrossRegionPairData.skipped,
+    selectedCrossRegionStaffKey,
+  ]);
+
+  useEffect(() => {
+    setCrossRegionDistances({});
+    setCrossRegionPairKey("");
+    setCrossRegionError(null);
+  }, [selectedCrossRegionStaffKey]);
+
+  useEffect(() => {
+    if (
+      !clientRoster ||
+      !selectedCrossRegionStaffKey ||
+      selectedCrossRegionPairData.pairs.length === 0
+    ) {
+      setCrossRegionLoading(false);
+      return;
+    }
+
+    if (crossRegionPairKey === crossRegionCurrentPairKey) return;
+
+    const requestData = getUniqueAddressesAndPairs(selectedCrossRegionPairData.pairs);
+    if (requestData.addresses.length === 0 || requestData.pairs.length === 0) {
+      setCrossRegionLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCrossRegionLoading(true);
+    setCrossRegionError(null);
+
+    fetch("/api/cross-region/distances", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestData),
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.status === "error") {
+          throw new Error(payload.error || "距離計算失敗");
+        }
+        return payload;
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        setCrossRegionDistances(payload.results || {});
+        setCrossRegionPairKey(crossRegionCurrentPairKey);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setCrossRegionDistances({});
+        setCrossRegionError(err.message || "距離計算失敗，請確認 GOOGLE_MAPS_API_KEY 設定。");
+      })
+      .finally(() => {
+        if (!cancelled) setCrossRegionLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    clientRoster,
+    crossRegionCurrentPairKey,
+    crossRegionPairKey,
+    selectedCrossRegionPairData.pairs,
+    selectedCrossRegionStaffKey,
+  ]);
 
   // Logic: Calculate Availability for Selected Date
   const processedAvailability = useMemo(() => {
@@ -2607,6 +2795,18 @@ function App() {
                 <BarChart2 className="w-4 h-4" />
                 <span>時數統計</span>
               </button>
+              <button
+                onClick={() => setViewMode("cross-region")}
+                className={cn(
+                  "px-6 py-2 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center space-x-2",
+                  viewMode === "cross-region"
+                    ? "bg-white text-brand-slate shadow-lg"
+                    : "text-white/60 hover:text-white",
+                )}
+              >
+                <Route className="w-4 h-4" />
+                <span>跨區獎金</span>
+              </button>
             </div>
 
             <div className="flex items-center space-x-4">
@@ -3042,7 +3242,7 @@ function App() {
         </div>
 
         {/* Scenario A: Filter Applied */}
-        {activeFilterResult && viewMode !== "week" ? (
+        {activeFilterResult && viewMode === "day" ? (
           <div className="space-y-8 anim-fade-up anim-delay-2">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
@@ -3429,6 +3629,25 @@ function App() {
               </div>
             )}
           </div>
+        ) : viewMode === "cross-region" ? (
+          <CrossRegionBonusView
+            roster={clientRoster}
+            rosterLoading={clientRosterLoading}
+            rosterError={clientRosterError}
+            onUpload={handleClientRosterUpload}
+            pairData={crossRegionPairData}
+            report={crossRegionReport}
+            staffOptions={crossRegionStaffOptions}
+            selectedStaffKey={selectedCrossRegionStaffKey}
+            onSelectStaff={setSelectedCrossRegionStaffKey}
+            staffSearch={crossRegionStaffSearch}
+            onStaffSearchChange={setCrossRegionStaffSearch}
+            selectedPairData={selectedCrossRegionPairData}
+            selectedStaffDetail={selectedCrossRegionDetail}
+            distanceLoading={crossRegionLoading}
+            distanceError={crossRegionError}
+            cardComponent={Card}
+          />
         ) : viewMode === "stats" ? (
           <StatsView
             statsData={statsData}
