@@ -15,6 +15,11 @@ dist-ssr
 .env
 .env.*
 
+# Schedule / case data (contains real staff and client names — keep out of git)
+*.xls
+*.xlsx
+references/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
