@@ -766,7 +766,7 @@ export const CrossRegionBonusView = ({
         <div>
           <h2 className="text-xl font-bold text-brand-slate">跨區獎金</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            判定同日相鄰兩案行車距離超過 15 公里，且連續四周每周至少一次。
+            判定同日相鄰兩案行車距離超過 15 公里，且當月每周至少一次。
           </p>
         </div>
         <label
@@ -945,9 +945,9 @@ export const CrossRegionBonusView = ({
                         <th className="border border-slate-200 px-3 py-2 text-left">後案</th>
                         <th className="border border-slate-200 px-3 py-2 text-left">前案地址</th>
                         <th className="border border-slate-200 px-3 py-2 text-left">後案地址</th>
-                        <th className="border border-slate-200 px-3 py-2 text-right">距離</th>
-                        <th className="border border-slate-200 px-3 py-2 text-right">車程</th>
-                        <th className="border border-slate-200 px-3 py-2 text-center">狀態</th>
+                        <th className="border border-slate-200 px-3 py-2 text-right whitespace-nowrap">距離</th>
+                        <th className="border border-slate-200 px-3 py-2 text-right whitespace-nowrap">車程</th>
+                        <th className="border border-slate-200 px-3 py-2 text-center whitespace-nowrap">狀態</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -976,14 +976,14 @@ export const CrossRegionBonusView = ({
                             <td className="border border-slate-200 px-3 py-2 text-slate-500">
                               {formatAddress(row.toAddress, row.destinationAddress)}
                             </td>
-                            <td className="border border-slate-200 px-3 py-2 text-right font-mono">
+                            <td className="border border-slate-200 px-3 py-2 text-right font-mono whitespace-nowrap">
                               {row.distanceKm == null ? "-" : formatDistance(row.distanceKm)}
                             </td>
-                            <td className="border border-slate-200 px-3 py-2 text-right font-mono">
+                            <td className="border border-slate-200 px-3 py-2 text-right font-mono whitespace-nowrap">
                               {formatDuration(row.durationSeconds)}
                             </td>
-                            <td className="border border-slate-200 px-3 py-2 text-center">
-                              <span className={`px-2 py-0.5 rounded-full font-bold ${meta.className}`}>
+                            <td className="border border-slate-200 px-3 py-2 text-center whitespace-nowrap">
+                              <span className={`px-2 py-0.5 rounded-full font-bold whitespace-nowrap ${meta.className}`}>
                                 {meta.label}
                               </span>
                             </td>
@@ -1035,7 +1035,7 @@ export const CrossRegionBonusView = ({
                         )}
                       </div>
                       <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">
-                        {staff.weeks.length} 周
+                        {(staff.eligibleMonths || []).join("、") || `${staff.weeks.length} 周`}
                       </span>
                     </div>
                     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
@@ -1072,7 +1072,7 @@ export const CrossRegionBonusView = ({
             <Card className="p-8 text-center border-dashed border-2 border-slate-200 bg-slate-50/50 shadow-none">
               <Route className="w-10 h-10 text-slate-300 mx-auto mb-3" />
               <p className="text-sm font-semibold text-slate-600">
-                目前沒有服務員符合連續四周跨區條件
+                目前沒有服務員符合當月每周跨區條件
               </p>
             </Card>
           ) : null}
@@ -1080,7 +1080,7 @@ export const CrossRegionBonusView = ({
           {pendingStaff.length > 0 && (
             <Card className="p-5 overflow-hidden">
               <h3 className="text-base font-bold text-brand-slate mb-4">
-                未達連續四周但有跨區紀錄
+                未達當月每周但有跨區紀錄
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs border-collapse min-w-[640px]">
@@ -1088,6 +1088,7 @@ export const CrossRegionBonusView = ({
                     <tr>
                       <th className="border border-slate-200 px-3 py-2 text-left">服務員</th>
                       <th className="border border-slate-200 px-3 py-2 text-center">符合周數</th>
+                      <th className="border border-slate-200 px-3 py-2 text-left">當月缺少周次</th>
                       <th className="border border-slate-200 px-3 py-2 text-left">日期</th>
                     </tr>
                   </thead>
@@ -1099,6 +1100,14 @@ export const CrossRegionBonusView = ({
                         </td>
                         <td className="border border-slate-200 px-3 py-2 text-center">
                           {staff.weeks.length}
+                        </td>
+                        <td className="border border-slate-200 px-3 py-2 text-slate-500">
+                          {(staff.months || [])
+                            .map(
+                              (month) =>
+                                `${month.month}（缺 ${month.missingWeeks.length}/${month.requiredWeeks.length} 周）`,
+                            )
+                            .join("、")}
                         </td>
                         <td className="border border-slate-200 px-3 py-2 text-slate-500">
                           {staff.qualifyingLegs.map((leg) => leg.date).join("、")}

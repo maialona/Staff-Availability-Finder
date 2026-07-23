@@ -378,18 +378,40 @@ const getSundayWeekStart = (dateStr) => {
   return formatDateString(date);
 };
 
-const hasFourConsecutiveWeeks = (weekStarts) => {
-  const sorted = [...new Set(weekStarts)].sort();
-  for (let index = 0; index <= sorted.length - 4; index += 1) {
-    const start = new Date(`${sorted[index]}T00:00:00`);
-    const expected = [0, 1, 2, 3].map((offset) => {
-      const date = new Date(start);
-      date.setDate(date.getDate() + offset * 7);
-      return formatDateString(date);
-    });
-    if (expected.every((week) => sorted.includes(week))) return expected;
+const getMonthKey = (dateStr) => String(dateStr).slice(0, 7);
+
+// 該月涵蓋的所有周（以周日為起始），含跨月的頭尾那一周
+const getMonthWeekStarts = (monthKey) => {
+  const [year, month] = monthKey.split("-").map(Number);
+  const firstDay = new Date(year, month - 1, 1);
+  const lastDay = new Date(year, month, 0);
+  const cursor = new Date(firstDay);
+  cursor.setDate(cursor.getDate() - cursor.getDay());
+
+  const weeks = [];
+  while (cursor <= lastDay) {
+    weeks.push(formatDateString(cursor));
+    cursor.setDate(cursor.getDate() + 7);
   }
-  return [];
+  return weeks;
+};
+
+// 當月每一周都至少有一次跨區轉場才算符合
+const evaluateMonthlyWeeks = (legs = []) => {
+  const weekSet = new Set(legs.map((leg) => leg.weekStart));
+  const monthKeys = [...new Set(legs.map((leg) => getMonthKey(leg.date)))].sort();
+
+  return monthKeys.map((monthKey) => {
+    const requiredWeeks = getMonthWeekStarts(monthKey);
+    const coveredWeeks = requiredWeeks.filter((week) => weekSet.has(week));
+    return {
+      month: monthKey,
+      requiredWeeks,
+      coveredWeeks,
+      missingWeeks: requiredWeeks.filter((week) => !weekSet.has(week)),
+      eligible: requiredWeeks.length > 0 && coveredWeeks.length === requiredWeeks.length,
+    };
+  });
 };
 
 export function buildCrossRegionBonusReport({
@@ -437,16 +459,21 @@ export function buildCrossRegionBonusReport({
   const staffResults = [...byStaff.values()]
     .map((staff) => {
       const weeks = [...new Set(staff.qualifyingLegs.map((leg) => leg.weekStart))].sort();
-      const consecutiveWeeks = hasFourConsecutiveWeeks(weeks);
+      const months = evaluateMonthlyWeeks(staff.qualifyingLegs);
+      const eligibleMonths = months.filter((item) => item.eligible).map((item) => item.month);
       return {
         ...staff,
         weeks,
-        consecutiveWeeks,
-        eligible: consecutiveWeeks.length >= 4,
+        months,
+        eligibleMonths,
+        eligible: eligibleMonths.length > 0,
       };
     })
     .sort((a, b) => {
       if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
+      if (b.eligibleMonths.length !== a.eligibleMonths.length) {
+        return b.eligibleMonths.length - a.eligibleMonths.length;
+      }
       if (b.weeks.length !== a.weeks.length) return b.weeks.length - a.weeks.length;
       return a.staffName.localeCompare(b.staffName, "zh-Hant");
     });
