@@ -8,6 +8,7 @@ import {
   Download,
   BarChart3,
   LayoutGrid,
+  List,
   Search,
   Route,
   MapPin,
@@ -87,6 +88,7 @@ export const StatsView = ({
   const [hourFilter, setHourFilter] = React.useState("all");
   const [mounted, setMounted] = React.useState(false);
   const [copiedGrid, setCopiedGrid] = React.useState(false);
+  const [copiedList, setCopiedList] = React.useState(false);
   const [copiedDetail, setCopiedDetail] = React.useState(false);
   const [copiedOT, setCopiedOT] = React.useState(false);
 
@@ -132,6 +134,21 @@ export const StatsView = ({
     navigator.clipboard.writeText(buildStatsGridCopyText(statsGridRows));
     setCopiedGrid(true);
     setTimeout(() => setCopiedGrid(false), 1500);
+  };
+
+  const handleListCopy = () => {
+    const headers = ["員編", "姓名", "總時數", "轉場"];
+    const rows = sorted.map((item) =>
+      [
+        item.staff.sourceStaffId ?? item.staff.id ?? "",
+        item.staff.name,
+        formatStatsHours(item.totalHours),
+        formatStatsHours(item.transitHoursTotal),
+      ].join("\t"),
+    );
+    navigator.clipboard.writeText([headers.join("\t"), ...rows].join("\n"));
+    setCopiedList(true);
+    setTimeout(() => setCopiedList(false), 1500);
   };
 
   return (
@@ -268,6 +285,18 @@ export const StatsView = ({
                 <LayoutGrid className="w-3.5 h-3.5" />
                 表格
               </button>
+              <button
+                onClick={() => setViewMode("list")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors",
+                  viewMode === "list"
+                    ? "bg-brand-coral text-white"
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200",
+                )}
+              >
+                <List className="w-3.5 h-3.5" />
+                列表
+              </button>
             </div>
         </div>
 
@@ -382,7 +411,7 @@ export const StatsView = ({
               </div>
             )}
           </div>
-        ) : (
+        ) : viewMode === "grid" ? (
           <div className="bg-gradient-to-br from-[#fff7f3] via-white to-[#fffaf7]">
             <div className="flex items-center justify-between gap-3 border-b border-brand-coral/10 bg-brand-coral/[0.03] px-4 py-3">
               <p className="text-sm font-medium text-slate-500">
@@ -431,6 +460,60 @@ export const StatsView = ({
                       </tr>
                     ))}
                   </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="bg-gradient-to-br from-[#fff7f3] via-white to-[#fffaf7]">
+            <div className="flex items-center justify-between gap-3 border-b border-brand-coral/10 bg-brand-coral/[0.03] px-4 py-3">
+              <p className="text-sm font-medium text-slate-500">
+                依目前搜尋與排序結果顯示員編、姓名、總時數與轉場
+              </p>
+              <button
+                onClick={handleListCopy}
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                title="複製列表"
+              >
+                {copiedList ? (
+                  <Check size={15} className="text-emerald-500" />
+                ) : (
+                  <Copy size={15} />
+                )}
+              </button>
+            </div>
+            {sorted.length === 0 ? (
+              <div className="py-12 text-center text-sm text-slate-400">
+                找不到符合的人員
+              </div>
+            ) : (
+              <div className="overflow-x-auto px-4 py-4 md:px-5">
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                  <table className="w-full border-collapse bg-white text-xs">
+                    <thead>
+                      <tr>
+                        <th className="border border-slate-200 bg-slate-50 px-3 py-2 text-center font-bold text-slate-600">員編</th>
+                        <th className="border border-slate-200 bg-slate-50 px-3 py-2 text-left font-bold text-slate-600">姓名</th>
+                        <th className="border border-slate-200 bg-slate-50 px-3 py-2 text-center font-bold text-slate-600">總時數</th>
+                        <th className="border border-slate-200 bg-slate-50 px-3 py-2 text-center font-bold text-slate-600">轉場</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sorted.map((item) => (
+                        <tr key={item.staff.id} className="hover:bg-slate-50">
+                          <td className="border border-slate-200 px-3 py-1.5 text-center text-slate-500">{item.staff.sourceStaffId ?? item.staff.id ?? "-"}</td>
+                          <td className="border border-slate-200 px-3 py-1.5 text-left font-medium text-brand-slate">
+                            <span className="inline-flex items-center gap-1.5">
+                              <OrgDot staff={item.staff} orgs={orgs} />
+                              <span>{item.staff.name}</span>
+                            </span>
+                          </td>
+                          <td className="border border-slate-200 px-3 py-1.5 text-center font-bold text-brand-coral">{formatStatsHours(item.totalHours)}</td>
+                          <td className="border border-slate-200 px-3 py-1.5 text-center text-slate-500">{formatStatsHours(item.transitHoursTotal)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
                   </table>
                 </div>
               </div>

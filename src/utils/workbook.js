@@ -140,6 +140,29 @@ export function parseCaseScheduleWorkbook(workbook, xlsx) {
   return normalizeCaseScheduleData(clients);
 }
 
+// Parses a duration fragment from a schedule cell into decimal hours.
+// Supports the legacy "7.67小時" / bare "0.5" (hours) formats and the
+// current "6時25分" / "24分" / "9時" (hours+minutes) format.
+function parseDurationToHours(raw) {
+  if (!raw) return null;
+  const str = raw.trim();
+
+  const hourMinuteMatch = str.match(/^(?:(\d+(?:\.\d+)?)時)?(?:(\d+(?:\.\d+)?)分)?$/);
+  if (hourMinuteMatch && (hourMinuteMatch[1] !== undefined || hourMinuteMatch[2] !== undefined)) {
+    const hours = hourMinuteMatch[1] ? parseFloat(hourMinuteMatch[1]) : 0;
+    const minutes = hourMinuteMatch[2] ? parseFloat(hourMinuteMatch[2]) : 0;
+    return hours + minutes / 60;
+  }
+
+  const decimalHourMatch = str.match(/^(\d+(?:\.\d+)?)小時$/);
+  if (decimalHourMatch) return parseFloat(decimalHourMatch[1]);
+
+  const bareNumberMatch = str.match(/^(\d+(?:\.\d+)?)$/);
+  if (bareNumberMatch) return parseFloat(bareNumberMatch[1]);
+
+  return null;
+}
+
 export function parseOrgWorkbook({
   file,
   workbook,
@@ -150,8 +173,9 @@ export function parseOrgWorkbook({
   const sheet1Name = workbook.SheetNames[0];
   const sheet1 = workbook.Sheets[sheet1Name];
   const orgId = Date.now().toString();
+  const STAFF_SHEET_NAME_PATTERN = /^([A-Za-z0-9]+)([一-龥].*)$/;
   const isMonthlyGrid = workbook.SheetNames.some((name) =>
-    /^[A-Z]\d{3}/.test(name.trim()),
+    STAFF_SHEET_NAME_PATTERN.test(name.trim()),
   );
 
   let rawSchedule = [];
@@ -172,11 +196,11 @@ export function parseOrgWorkbook({
 
     workbook.SheetNames.forEach((sheetName) => {
       const trimmedName = sheetName.trim();
-      const nameMatch = trimmedName.match(/^[A-Z]\d{3}(.+)$/);
+      const nameMatch = trimmedName.match(STAFF_SHEET_NAME_PATTERN);
       if (!nameMatch) return;
 
-      const staffName = nameMatch[1].trim();
-      const staffId = trimmedName.substring(0, 4);
+      const staffId = nameMatch[1].trim();
+      const staffName = nameMatch[2].trim();
       gridStaff.push({ id: staffId, name: staffName });
 
       const worksheet = workbook.Sheets[sheetName];
@@ -196,13 +220,16 @@ export function parseOrgWorkbook({
           if (!isValid(dateObj)) return;
           const dateStr = format(dateObj, "yyyy-MM-dd");
 
-          const transitMatch = cell.match(/\([\d.]+小時\/([\d.]+)\)/);
-          if (transitMatch) {
+          const transitParenMatch = cell.match(/\(([^()/]+)\/([^()/]+)\)/);
+          const transitHours = transitParenMatch
+            ? parseDurationToHours(transitParenMatch[2])
+            : null;
+          if (transitHours !== null) {
             gridSchedule.push({
               服務日期: dateStr,
               服務時間: "_transit",
               服務人員: staffName,
-              _transitHours: parseFloat(transitMatch[1]),
+              _transitHours: transitHours,
               _isGrid: true,
             });
           }
@@ -445,7 +472,13 @@ export function parseOrgWorkbook({
 
   let uniqueStaff = [];
   let sheet2Valid = false;
-  if (rawStaff.length > 0) {
+  if (isMonthlyGrid && rawStaff.length > 0) {
+    // Grid sheets already yield {id, name} straight from the "員編+姓名" sheet
+    // name, so skip the roster header heuristic below (which expects a sheet2
+    // staff table with Chinese/capitalised column headers).
+    uniqueStaff = rawStaff;
+    sheet2Valid = true;
+  } else if (rawStaff.length > 0) {
     const firstStaffRow = rawStaff[0];
     const staffKeys = Object.keys(firstStaffRow);
     const staffNameKey = staffKeys.find((key) =>
