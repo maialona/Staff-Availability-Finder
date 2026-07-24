@@ -62,12 +62,15 @@ const buildStatsGridRows = (items, columns = STATS_GRID_COLUMNS) => {
 
 const formatStatsHours = (value) => (value || value === 0 ? `${value}` : "-");
 
+const gridTotalHours = (item) =>
+  +((item.totalHours || 0) + (item.transitHoursTotal || 0)).toFixed(1);
+
 const buildStatsGridCopyText = (rows) =>
   rows
     .map((row) =>
       row
         .flatMap((item) =>
-          item ? [item.staff.name, formatStatsHours(item.totalHours)] : ["", ""],
+          item ? [item.staff.name, formatStatsHours(gridTotalHours(item))] : ["", ""],
         )
         .join("\t"),
     )
@@ -415,7 +418,7 @@ export const StatsView = ({
           <div className="bg-gradient-to-br from-[#fff7f3] via-white to-[#fffaf7]">
             <div className="flex items-center justify-between gap-3 border-b border-brand-coral/10 bg-brand-coral/[0.03] px-4 py-3">
               <p className="text-sm font-medium text-slate-500">
-                依目前搜尋與排序結果顯示姓名與總時數
+                依目前搜尋與排序結果顯示姓名與總時數（含轉場）
               </p>
               <button
                 onClick={handleGridCopy}
@@ -453,7 +456,7 @@ export const StatsView = ({
                               )}
                             </td>
                             <td className="border border-slate-200 bg-slate-50/70 px-2 py-1.5 text-center text-sm font-medium text-brand-coral md:px-3 md:py-2">
-                              {item ? formatStatsHours(item.totalHours) : ""}
+                              {item ? formatStatsHours(gridTotalHours(item)) : ""}
                             </td>
                           </React.Fragment>
                         ))}
