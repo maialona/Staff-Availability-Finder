@@ -40,6 +40,12 @@ import {
   DEFAULT_PERSISTED_STATE,
   normalizeOrgData,
   readLegacyPersistedState,
+  readCrossRegionRoster,
+  writeCrossRegionRoster,
+  readCrossRegionDistances,
+  writeCrossRegionDistances,
+  readCrossRegionSelectedStaffKey,
+  writeCrossRegionSelectedStaffKey,
 } from "./utils/persistence";
 import {
   loadXLSX,
@@ -1184,16 +1190,30 @@ function App() {
   const [caseScheduleFileName, setCaseScheduleFileName] = useState(
     DEFAULT_PERSISTED_STATE.caseScheduleFileName,
   );
-  const [clientRoster, setClientRoster] = useState(null);
+  const [clientRoster, setClientRoster] = useState(() => readCrossRegionRoster());
   const [clientRosterLoading, setClientRosterLoading] = useState(false);
   const [clientRosterError, setClientRosterError] = useState(null);
-  const [crossRegionDistances, setCrossRegionDistances] = useState({});
+  const [crossRegionDistances, setCrossRegionDistances] = useState(() =>
+    readCrossRegionDistances(),
+  );
   const [crossRegionLoading, setCrossRegionLoading] = useState(false);
   const [crossRegionError, setCrossRegionError] = useState(null);
   const [crossRegionPairKey, setCrossRegionPairKey] = useState("");
   const [selectedCrossRegionStaffKey, setSelectedCrossRegionStaffKey] =
-    useState("");
+    useState(() => readCrossRegionSelectedStaffKey());
   const [crossRegionStaffSearch, setCrossRegionStaffSearch] = useState("");
+
+  useEffect(() => {
+    writeCrossRegionRoster(clientRoster);
+  }, [clientRoster]);
+
+  useEffect(() => {
+    writeCrossRegionDistances(crossRegionDistances);
+  }, [crossRegionDistances]);
+
+  useEffect(() => {
+    writeCrossRegionSelectedStaffKey(selectedCrossRegionStaffKey);
+  }, [selectedCrossRegionStaffKey]);
 
   React.useEffect(() => {
     let isCancelled = false;
@@ -1582,7 +1602,6 @@ function App() {
   ]);
 
   useEffect(() => {
-    setCrossRegionDistances({});
     setCrossRegionPairKey("");
     setCrossRegionError(null);
   }, [selectedCrossRegionStaffKey]);
@@ -1599,8 +1618,20 @@ function App() {
 
     if (crossRegionPairKey === crossRegionCurrentPairKey) return;
 
-    const requestData = getUniqueAddressesAndPairs(selectedCrossRegionPairData.pairs);
+    // Skip pairs whose distance was already cached (e.g. restored from localStorage).
+    const missingPairs = selectedCrossRegionPairData.pairs.filter(
+      (pair) => !crossRegionDistances[pair.id],
+    );
+
+    if (missingPairs.length === 0) {
+      setCrossRegionPairKey(crossRegionCurrentPairKey);
+      setCrossRegionLoading(false);
+      return;
+    }
+
+    const requestData = getUniqueAddressesAndPairs(missingPairs);
     if (requestData.addresses.length === 0 || requestData.pairs.length === 0) {
+      setCrossRegionPairKey(crossRegionCurrentPairKey);
       setCrossRegionLoading(false);
       return;
     }
@@ -1623,12 +1654,11 @@ function App() {
       })
       .then((payload) => {
         if (cancelled) return;
-        setCrossRegionDistances(payload.results || {});
+        setCrossRegionDistances((prev) => ({ ...prev, ...(payload.results || {}) }));
         setCrossRegionPairKey(crossRegionCurrentPairKey);
       })
       .catch((err) => {
         if (cancelled) return;
-        setCrossRegionDistances({});
         setCrossRegionError(err.message || "距離計算失敗，請確認 GOOGLE_MAPS_API_KEY 設定。");
       })
       .finally(() => {
@@ -1641,6 +1671,7 @@ function App() {
   }, [
     clientRoster,
     crossRegionCurrentPairKey,
+    crossRegionDistances,
     crossRegionPairKey,
     selectedCrossRegionPairData.pairs,
     selectedCrossRegionStaffKey,
@@ -2812,7 +2843,7 @@ function App() {
             <div className="flex items-center space-x-4">
               <Button
                 variant="outline"
-                className="h-10 rounded-xl border-white/10 bg-white/5 text-white hover:bg-white/10 font-bold"
+                className="h-10 rounded-xl border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10 font-bold"
                 onClick={() => setIsAgentOpen(true)}
               >
                 <Sparkles className="w-4 h-4 mr-2" />
@@ -2820,7 +2851,7 @@ function App() {
               </Button>
               <Button
                 variant="outline"
-                className="h-10 rounded-xl border-white/10 bg-white/5 text-white hover:bg-white/10 font-bold"
+                className="h-10 rounded-xl border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10 font-bold"
                 onClick={() => setShowOrgManager(true)}
               >
                 管理機構

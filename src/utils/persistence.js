@@ -35,12 +35,59 @@ export const DEFAULT_PERSISTED_STATE = {
 export const createScopedStaffKey = (orgId, staffId, staffName = "") =>
   `${orgId}::${staffId || staffName}`;
 
+export const CROSS_REGION_STORAGE_KEYS = {
+  roster: "stafffind_cross_region_roster",
+  distances: "stafffind_cross_region_distances",
+  selectedStaffKey: "stafffind_cross_region_staff",
+};
+
 const readLocalStorageJSON = (key, fallbackValue) => {
   try {
     const saved = localStorage.getItem(key);
     return saved ? JSON.parse(saved) : fallbackValue;
   } catch {
     return fallbackValue;
+  }
+};
+
+const writeLocalStorageJSON = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore storage quota / serialization errors
+  }
+};
+
+export const readCrossRegionRoster = () =>
+  readLocalStorageJSON(CROSS_REGION_STORAGE_KEYS.roster, null);
+
+export const writeCrossRegionRoster = (roster) => {
+  if (!roster) {
+    localStorage.removeItem(CROSS_REGION_STORAGE_KEYS.roster);
+    return;
+  }
+  writeLocalStorageJSON(CROSS_REGION_STORAGE_KEYS.roster, {
+    fileName: roster.fileName || "",
+    sheetName: roster.sheetName || "",
+    headerIndex: roster.headerIndex || 0,
+    clients: roster.clients || [],
+  });
+};
+
+export const readCrossRegionDistances = () =>
+  readLocalStorageJSON(CROSS_REGION_STORAGE_KEYS.distances, {});
+
+export const writeCrossRegionDistances = (distances) =>
+  writeLocalStorageJSON(CROSS_REGION_STORAGE_KEYS.distances, distances || {});
+
+export const readCrossRegionSelectedStaffKey = () =>
+  localStorage.getItem(CROSS_REGION_STORAGE_KEYS.selectedStaffKey) || "";
+
+export const writeCrossRegionSelectedStaffKey = (staffKey) => {
+  if (staffKey) {
+    localStorage.setItem(CROSS_REGION_STORAGE_KEYS.selectedStaffKey, staffKey);
+  } else {
+    localStorage.removeItem(CROSS_REGION_STORAGE_KEYS.selectedStaffKey);
   }
 };
 
