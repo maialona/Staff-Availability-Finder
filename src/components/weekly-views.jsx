@@ -1,9 +1,87 @@
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { addDays, format, isSameDay, startOfWeek } from "date-fns";
+import { assignIntervalLanes } from "../utils/availability";
+import { getOrgColor } from "../utils/org-colors";
 
 const DAY_NAMES = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"];
 
-export const TimelineBar = ({ startTime, endTime, blocked, rawBusy, date }) => {
+const TimelineTooltip = ({ tooltip }) => {
+  if (!tooltip || typeof document === "undefined") return null;
+
+  const tooltipWidth = Math.min(280, window.innerWidth - 24);
+  const anchorCenter = tooltip.anchor.left + tooltip.anchor.width / 2;
+  const left = Math.min(
+    window.innerWidth - 12 - tooltipWidth / 2,
+    Math.max(12 + tooltipWidth / 2, anchorCenter),
+  );
+  const spaceBelow = window.innerHeight - tooltip.anchor.bottom;
+  const placement = tooltip.anchor.top >= 120 || spaceBelow < 120 ? "top" : "bottom";
+  const top = placement === "top" ? tooltip.anchor.top - 10 : tooltip.anchor.bottom + 10;
+
+  return createPortal(
+    <div
+      id="timeline-service-tooltip"
+      role="tooltip"
+      className="pointer-events-none fixed z-[100] rounded-xl border border-slate-700/80 bg-brand-slate px-3.5 py-3 text-left text-white shadow-[0_12px_32px_rgba(15,23,42,0.28)]"
+      style={{
+        left,
+        top,
+        width: tooltipWidth,
+        transform: placement === "top" ? "translate(-50%, -100%)" : "translateX(-50%)",
+      }}
+    >
+      <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-200">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${tooltip.color.dot}`} />
+        <span className="truncate">{tooltip.orgName}</span>
+        {tooltip.staffName && (
+          <>
+            <span className="text-slate-500">·</span>
+            <span className="truncate">{tooltip.staffName}</span>
+          </>
+        )}
+      </div>
+      <div className="mt-2 flex items-baseline justify-between gap-3">
+        <span className="text-[10px] font-medium text-slate-400">服務時段</span>
+        <span className="text-sm font-bold tabular-nums tracking-wide">{tooltip.time}</span>
+      </div>
+      {tooltip.caseName && (
+        <div className="mt-1.5 flex items-baseline justify-between gap-3 border-t border-white/10 pt-1.5">
+          <span className="text-[10px] font-medium text-slate-400">個案</span>
+          <span className="max-w-[190px] truncate text-xs font-semibold">{tooltip.caseName}</span>
+        </div>
+      )}
+      <span
+        className={`absolute left-1/2 h-2.5 w-2.5 -translate-x-1/2 rotate-45 bg-brand-slate ${
+          placement === "top"
+            ? "-bottom-[5px] border-b border-r border-slate-700/80"
+            : "-top-[5px] border-l border-t border-slate-700/80"
+        }`}
+      />
+    </div>,
+    document.body,
+  );
+};
+
+export const TimelineBar = ({
+  startTime,
+  endTime,
+  bufferedBusy = [],
+  rawBusy = [],
+  date,
+}) => {
+  const [tooltip, setTooltip] = useState(null);
   const totalMinutes = (endTime - startTime) * 60;
+  const laneAssignments = assignIntervalLanes(rawBusy);
+  const barHeight = 24;
+  const bufferHeight = 32;
+  const laneGap = 4;
+  const laneStep = barHeight + laneGap;
+  const laneGroupHeight =
+    barHeight + (laneAssignments.laneCount - 1) * laneStep;
+  const busyByOriginalIndex = new Map(
+    laneAssignments.intervals.map((interval) => [interval.originalIndex, interval]),
+  );
 
   const getPos = (time) => {
     const startOfDay = new Date(date);
@@ -13,45 +91,110 @@ export const TimelineBar = ({ startTime, endTime, blocked, rawBusy, date }) => {
     return (diff / totalMinutes) * 100;
   };
 
+  useEffect(() => {
+    if (!tooltip) return undefined;
+
+    const dismissTooltip = () => setTooltip(null);
+    window.addEventListener("resize", dismissTooltip);
+    window.addEventListener("scroll", dismissTooltip, true);
+    return () => {
+      window.removeEventListener("resize", dismissTooltip);
+      window.removeEventListener("scroll", dismissTooltip, true);
+    };
+  }, [tooltip]);
+
+  const showTooltip = (event, busy, color, sourceLabel) => {
+    setTooltip({
+      busyKey: busy.originalIndex,
+      anchor: event.currentTarget.getBoundingClientRect(),
+      orgName: sourceLabel,
+      staffName: busy.originalStaffName,
+      time: `${format(busy.start, "HH:mm")} - ${format(busy.end, "HH:mm")}`,
+      caseName: busy.caseName,
+      color,
+    });
+  };
+
   return (
     <div className="absolute inset-0 w-full h-full">
-      {blocked.map((block, index) => {
+      {bufferedBusy.map((block, index) => {
         const left = Math.max(0, getPos(block.start));
         const right = Math.min(100, getPos(block.end));
         const width = right - left;
         if (width <= 0) return null;
+        const lane = busyByOriginalIndex.get(index)?.lane ?? 0;
+        const color = getOrgColor(block.orgIdx);
 
         return (
           <div
             key={`buff-${index}`}
-            className="absolute top-2 bottom-2 bg-brand-coral/10 rounded-lg border border-brand-coral/20"
-            style={{ left: `${left}%`, width: `${width}%` }}
-            title={`Buffer/Busy: ${format(block.start, "HH:mm")} - ${format(block.end, "HH:mm")}`}
-          >
-            <div className="w-full h-full bg-[repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(255,107,107,0.05)_5px,rgba(255,107,107,0.05)_10px)] opacity-50"></div>
-          </div>
+            className={`absolute rounded-lg border ${color.buffer}`}
+            style={{
+              left: `${left}%`,
+              width: `${width}%`,
+              height: `${bufferHeight}px`,
+              top: `calc(50% - ${laneGroupHeight / 2 + (bufferHeight - barHeight) / 2}px + ${lane * laneStep}px)`,
+            }}
+            aria-hidden="true"
+          />
         );
       })}
 
-      {rawBusy.map((busy, index) => {
+      {laneAssignments.intervals.map((busy) => {
         const left = Math.max(0, getPos(busy.start));
         const right = Math.min(100, getPos(busy.end));
         const width = right - left;
         if (width <= 0) return null;
+        const color = getOrgColor(busy.orgIdx);
+        const sourceLabel = busy.orgName || "來源機構";
+        const detailParts = [
+          sourceLabel,
+          busy.originalStaffName,
+          `${format(busy.start, "HH:mm")} - ${format(busy.end, "HH:mm")}`,
+          busy.caseName,
+        ].filter(Boolean);
+        const accessibleLabel = detailParts.join("，");
 
         return (
           <div
-            key={`busy-${index}`}
-            className="absolute top-3 bottom-3 bg-brand-coral shadow-[0_4px_12px_rgba(255,107,107,0.3)] rounded-lg z-10 flex items-center justify-center overflow-hidden"
-            style={{ left: `${left}%`, width: `${width}%` }}
-            title={`Service: ${format(busy.start, "HH:mm")} - ${format(busy.end, "HH:mm")}`}
+            key={`busy-${busy.originalIndex}`}
+            className={`group/bar absolute ${color.bar} ${color.shadow} rounded-lg z-10 flex items-center justify-center overflow-hidden focus:outline-none focus:ring-2 focus:ring-brand-slate focus:ring-offset-1`}
+            style={{
+              left: `${left}%`,
+              width: `${width}%`,
+              height: `${barHeight}px`,
+              top: `calc(50% - ${laneGroupHeight / 2}px + ${busy.lane * laneStep}px)`,
+            }}
+            aria-label={accessibleLabel}
+            aria-describedby={
+              tooltip?.busyKey === busy.originalIndex
+                ? "timeline-service-tooltip"
+                : undefined
+            }
+            role="img"
+            tabIndex={0}
+            onPointerEnter={(event) => showTooltip(event, busy, color, sourceLabel)}
+            onPointerLeave={(event) => {
+              if (document.activeElement !== event.currentTarget) {
+                setTooltip(null);
+              }
+            }}
+            onFocus={(event) => showTooltip(event, busy, color, sourceLabel)}
+            onBlur={() => setTooltip(null)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setTooltip(null);
+                event.currentTarget.blur();
+              }
+            }}
           >
-            <div className="text-[8px] text-white font-bold truncate px-1 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+            <div className="truncate px-1 text-[8px] font-bold text-white opacity-0 transition-opacity duration-75 group-hover/bar:opacity-100 group-focus/bar:opacity-100 whitespace-nowrap">
               {format(busy.start, "HH:mm")}
             </div>
           </div>
         );
       })}
+      <TimelineTooltip tooltip={tooltip} />
     </div>
   );
 };
@@ -217,12 +360,15 @@ export const WeeklyFilterView = ({
                         key={personIndex}
                         className={cn(
                           "text-[10px] px-1.5 py-0.5 rounded-full font-medium",
-                          person.dayType === "例"
-                            ? "bg-slate-50 text-slate-400"
-                            : "bg-sky-50 text-sky-400",
+                          person.dayType === "例/休"
+                            ? "bg-violet-50 text-violet-500"
+                            : person.dayType === "例"
+                              ? "bg-slate-50 text-slate-400"
+                              : "bg-sky-50 text-sky-400",
                         )}
                       >
                         {person.staff.name}
+                        {person.dayType === "例/休" ? "（例／休）" : ""}
                       </span>
                     ))}
                   </div>
@@ -631,10 +777,12 @@ export const WeeklyView = ({
   orgs = [],
   cardComponent,
   orgDotComponent,
+  staffOrgLabelsComponent,
   cn,
 }) => {
   const Card = cardComponent;
   const OrgDot = orgDotComponent;
+  const StaffOrgLabels = staffOrgLabelsComponent;
   const weekStart = startOfWeek(new Date(selectedDate), { weekStartsOn: 0 });
   const weekDays = Array.from({ length: 7 }, (_, index) =>
     addDays(weekStart, index),
@@ -646,6 +794,14 @@ export const WeeklyView = ({
     }
 
     if (dayData.isOff) {
+      if (dayData.dayType === "例/休") {
+        return {
+          color: "bg-violet-50 text-violet-600 border-violet-200",
+          text: "例／休",
+          sub: "",
+        };
+      }
+
       if (dayData.dayType === "例") {
         return {
           color: "bg-slate-100 text-slate-400 border-slate-200",
@@ -788,6 +944,7 @@ export const WeeklyView = ({
                       <OrgDot staff={item.staff} orgs={orgs} />
                       {item.staff.name}
                     </span>
+                    {StaffOrgLabels && <StaffOrgLabels staff={item.staff} />}
                   </div>
                   {weekDays.map((day) => {
                     const dateStr = format(day, "yyyy-MM-dd");
@@ -817,16 +974,27 @@ export const WeeklyView = ({
                           <div className="absolute inset-0 bg-brand-slate text-white opacity-0 group-hover/cell:opacity-100 transition-opacity flex flex-col items-center justify-center p-2 text-center z-20">
                             {dayData && dayData.isOff ? (
                               <span className="text-[9px] font-bold text-slate-300">
-                                {dayData.dayType === "例" ? "例假日" : "休假日"}
+                                {dayData.dayType === "例/休"
+                                  ? "例假／休假"
+                                  : dayData.dayType === "例"
+                                    ? "例假日"
+                                    : "休假日"}
                               </span>
-                            ) : dayData && dayData.blocked.length > 0 ? (
+                            ) : dayData && dayData.busyRaw.length > 0 ? (
                               <div className="text-[8px] leading-tight flex flex-col gap-0.5">
-                                {dayData.blocked.slice(0, 3).map((block, blockIndex) => (
-                                  <span key={blockIndex}>
-                                    {format(block.start, "HH:mm")}~{format(block.end, "HH:mm")}
+                                {dayData.busyRaw.slice(0, 3).map((busy, busyIndex) => (
+                                  <span
+                                    key={busyIndex}
+                                    className="inline-flex items-center justify-center gap-1"
+                                  >
+                                    <span
+                                      className={`h-1.5 w-1.5 rounded-full ${getOrgColor(busy.orgIdx).dot}`}
+                                    />
+                                    {busy.orgName && `${busy.orgName} `}
+                                    {format(busy.start, "HH:mm")}~{format(busy.end, "HH:mm")}
                                   </span>
                                 ))}
-                                {dayData.blocked.length > 3 && <span>...</span>}
+                                {dayData.busyRaw.length > 3 && <span>...</span>}
                               </div>
                             ) : (
                               <span className="text-[9px] font-bold text-emerald-300">

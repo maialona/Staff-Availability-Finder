@@ -29,7 +29,11 @@ import {
   Sparkles,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
-import { calculateDailyAvailability, applyServiceFilter } from "./utils/availability";
+import {
+  assignIntervalLanes,
+  calculateDailyAvailability,
+  applyServiceFilter,
+} from "./utils/availability";
 import { applyTimeFilter } from "./utils/filtering";
 import {
   appStateService,
@@ -47,6 +51,10 @@ import {
   readCrossRegionSelectedStaffKey,
   writeCrossRegionSelectedStaffKey,
 } from "./utils/persistence";
+import {
+  buildAvailabilityStaffGroups,
+} from "./utils/staff-grouping";
+import { ORG_COLORS, getOrgColor } from "./utils/org-colors";
 import {
   loadXLSX,
   parseCaseScheduleWorkbook,
@@ -82,15 +90,6 @@ import { twMerge } from "tailwind-merge";
 function cn(...inputs) {
   return twMerge(clsx(inputs));
 }
-
-const ORG_COLORS = [
-  { bg: "bg-brand-coral/15", text: "text-brand-coral", dot: "bg-brand-coral" },
-  { bg: "bg-blue-100", text: "text-blue-600", dot: "bg-blue-500" },
-  { bg: "bg-emerald-100", text: "text-emerald-600", dot: "bg-emerald-500" },
-  { bg: "bg-violet-100", text: "text-violet-600", dot: "bg-violet-500" },
-  { bg: "bg-amber-100", text: "text-amber-600", dot: "bg-amber-500" },
-  { bg: "bg-pink-100", text: "text-pink-600", dot: "bg-pink-500" },
-];
 
 const WEEKDAY_OPTIONS = [
   { value: 0, label: "日" },
@@ -138,12 +137,6 @@ const AGENT_QUERY_KEYS = [
   "includeOffDuty",
   "includePotential",
 ];
-
-const normalizeCrossOrgStaffName = (name = "") =>
-  String(name)
-    .trim()
-    .replace(/\s*[（(][^)）]+[)）]\s*$/, "")
-    .trim();
 
 const parseDateTimeForFilter = (dateStr, timeStr) => {
   if (!dateStr || !timeStr) return null;
@@ -396,8 +389,32 @@ const splitFreeIntervalsByFilter = ({
 };
 
 const OrgDot = ({ staff, orgs }) => {
+  if (staff.isCrossOrg && staff.orgMemberships?.length) {
+    const orgNames = staff.orgMemberships
+      .map((membership) => membership.orgName)
+      .join("、");
+
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 shrink-0 mr-1"
+        title={orgNames}
+        aria-label={`所屬機構：${orgNames}`}
+      >
+        {staff.orgMemberships.map((membership) => (
+          <span
+            key={membership.staffKey}
+            className={cn(
+              "w-2 h-2 rounded-full inline-block",
+              getOrgColor(membership.orgIdx).dot,
+            )}
+          />
+        ))}
+      </span>
+    );
+  }
+
   if (!orgs || orgs.length <= 1 || staff.orgIdx === undefined) return null;
-  const color = ORG_COLORS[staff.orgIdx % ORG_COLORS.length];
+  const color = getOrgColor(staff.orgIdx);
   return (
     <span
       className={cn(
@@ -406,6 +423,35 @@ const OrgDot = ({ staff, orgs }) => {
       )}
       title={staff.org}
     />
+  );
+};
+
+const StaffOrgLabels = ({ staff, className }) => {
+  if (!staff.isCrossOrg || !staff.orgMemberships?.length) return null;
+
+  return (
+    <span
+      className={cn(
+        "mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5",
+        className,
+      )}
+    >
+      {staff.orgMemberships.map((membership) => (
+        <span
+          key={membership.staffKey}
+          className="inline-flex min-w-0 items-center gap-1 text-[10px] font-medium text-slate-400"
+          title={`${membership.orgName}：${membership.originalName}`}
+        >
+          <span
+            className={cn(
+              "h-1.5 w-1.5 shrink-0 rounded-full",
+              getOrgColor(membership.orgIdx).dot,
+            )}
+          />
+          <span className="max-w-20 truncate">{membership.orgName}</span>
+        </span>
+      ))}
+    </span>
   );
 };
 
@@ -756,6 +802,11 @@ function App() {
         ? allStaffData
         : allStaffData.filter((s) => selectedOrgIds.has(s.orgId)),
     [allStaffData, selectedOrgIds],
+  );
+
+  const availabilityStaffData = useMemo(
+    () => buildAvailabilityStaffGroups(activeStaffData),
+    [activeStaffData],
   );
 
   const activeScheduleData = useMemo(() => {
@@ -1682,10 +1733,10 @@ function App() {
     return calculateDailyAvailability(
       selectedDate,
       activeScheduleData,
-      activeStaffData,
+      availabilityStaffData,
       bufferBuffer,
     );
-  }, [activeScheduleData, activeStaffData, selectedDate, bufferBuffer]);
+  }, [activeScheduleData, availabilityStaffData, selectedDate, bufferBuffer]);
 
   const weekDates = useMemo(() => {
     if (viewMode !== "week" || !selectedDate) return [];
@@ -1704,18 +1755,18 @@ function App() {
       data: calculateDailyAvailability(
         dateStr,
         activeScheduleData,
-        activeStaffData,
+        availabilityStaffData,
         bufferBuffer,
       ),
     }));
-  }, [weekDates, activeScheduleData, activeStaffData, bufferBuffer]);
+  }, [weekDates, activeScheduleData, availabilityStaffData, bufferBuffer]);
 
   // Logic: Calculate Weekly Availability
   const processedWeeklyAvailability = useMemo(() => {
     if (viewMode !== "week" || weeklyAvailabilityByDate.length === 0) return [];
 
     // Re-structure by Staff
-    return activeStaffData.map((staff) => {
+    return availabilityStaffData.map((staff) => {
       const staffWeekData = {};
       weeklyAvailabilityByDate.forEach((day) => {
         const staffDayPayload = day.data.find((d) => d.staff.id === staff.id);
@@ -1732,7 +1783,7 @@ function App() {
       };
     });
   }, [
-    activeStaffData,
+    availabilityStaffData,
     viewMode,
     weeklyAvailabilityByDate,
   ]);
@@ -1910,7 +1961,7 @@ function App() {
       };
     });
 
-    return activeStaffData
+    return availabilityStaffData
       .map((staff) => {
         const staffKey = staff.staffKey || staff.id || staff.name;
         const ruleSummaries = ruleEvaluations.map((rule) => {
@@ -2002,7 +2053,7 @@ function App() {
     weeklyAvailabilityByDate,
     bufferBuffer,
     caseSettings,
-    activeStaffData,
+    availabilityStaffData,
   ]);
 
   const sortedMultiRuleWeeklyResult = useMemo(() => {
@@ -2161,26 +2212,24 @@ function App() {
   const crossOrgAvailableMatches = useMemo(() => {
     if (!activeFilterResult || activeOrgIds.size < 2) return [];
 
-    const groupedMatches = new Map();
+    return activeFilterResult.available
+      .filter((item) => {
+        if (!item.staff.isCrossOrg || !item.staff.orgMemberships?.length) {
+          return false;
+        }
 
-    activeFilterResult.available.forEach((item) => {
-      const normalizedName = normalizeCrossOrgStaffName(item.staff.name);
-      const orgId = item.staff.orgId;
-
-      if (!normalizedName || !orgId || !activeOrgIds.has(orgId)) return;
-
-      if (!groupedMatches.has(normalizedName)) {
-        groupedMatches.set(normalizedName, {
-          normalizedName,
-          orgMap: new Map(),
-        });
-      }
-
-      groupedMatches.get(normalizedName).orgMap.set(orgId, {
-        orgId,
-        orgName: item.staff.org,
-        originalName: item.staff.name,
+        const membershipOrgIds = new Set(
+          item.staff.orgMemberships.map((membership) => membership.orgId),
+        );
+        return (
+          membershipOrgIds.size === activeOrgIds.size &&
+          [...activeOrgIds].every((orgId) => membershipOrgIds.has(orgId))
+        );
+      })
+      .map((item) => ({
+        normalizedName: item.staff.name,
         staff: item.staff,
+        orgEntries: item.staff.orgMemberships,
         ...splitFreeIntervalsByFilter({
           freeIntervals: item.free || [],
           filterMode,
@@ -2191,21 +2240,7 @@ function App() {
           servicePeriodEnd,
           selectedDuration,
         }),
-      });
-    });
-
-    return [...groupedMatches.values()]
-      .filter((entry) => activeOrgIds.size === entry.orgMap.size)
-      .map((entry) => {
-        const orgEntries = [...entry.orgMap.values()].sort((a, b) =>
-          a.orgName.localeCompare(b.orgName, "zh-Hant"),
-        );
-
-        return {
-          normalizedName: entry.normalizedName,
-          orgEntries,
-        };
-      })
+      }))
       .sort((a, b) =>
         a.normalizedName.localeCompare(b.normalizedName, "zh-Hant"),
       );
@@ -3314,7 +3349,7 @@ function App() {
                       {crossOrgAvailableMatches.map((match) => (
                         <Card
                           key={match.normalizedName}
-                          className="p-4 flex flex-col gap-3 hover:shadow-md transition-shadow border-l-4 border-l-brand-coral"
+                          className="p-4 flex flex-col gap-3 hover:shadow-md transition-shadow border-brand-coral/20"
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div>
@@ -3331,63 +3366,61 @@ function App() {
                             {match.orgEntries.map((entry) => (
                               <span
                                 key={entry.orgId}
-                                className="text-[11px] bg-brand-lavender text-brand-slate px-2 py-0.5 rounded-full font-medium"
+                                className={cn(
+                                  "inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium",
+                                  getOrgColor(entry.orgIdx).bg,
+                                  getOrgColor(entry.orgIdx).text,
+                                )}
                               >
+                                <span
+                                  className={cn(
+                                    "h-1.5 w-1.5 rounded-full",
+                                    getOrgColor(entry.orgIdx).dot,
+                                  )}
+                                />
                                 {entry.orgName}
                               </span>
                             ))}
                           </div>
-                          <div className="text-[11px] text-slate-500 bg-slate-50 p-2 rounded-lg space-y-2">
-                            {match.orgEntries.map((entry) => (
-                              <div
-                                key={`${entry.orgId}-${entry.originalName}`}
-                                className="space-y-1.5"
-                              >
-                                <div className="flex items-center justify-between gap-3">
-                                  <span className="font-bold text-slate-600">
-                                    {entry.orgName}
+                          <div className="text-[11px] text-slate-500 bg-slate-50 p-2 rounded-lg space-y-1.5">
+                            <span className="block font-bold text-slate-600">
+                              合併後空檔
+                            </span>
+                            <div className="flex flex-wrap gap-1">
+                              {match.matching.length > 0 ? (
+                                match.matching.map((slot, slotIndex) => (
+                                  <span
+                                    key={slotIndex}
+                                    className="bg-white border border-slate-200 px-1.5 py-0.5 rounded shadow-sm text-[10px]"
+                                  >
+                                    {format(slot.start, "HH:mm")}-
+                                    {format(slot.end, "HH:mm")}
                                   </span>
-                                  <span className="text-slate-500">
-                                    {entry.originalName}
-                                  </span>
-                                </div>
-                                <div className="flex flex-wrap gap-1">
-                                  {entry.matching.length > 0 ? (
-                                    entry.matching.map((slot, slotIndex) => (
-                                      <span
-                                        key={`${entry.orgId}-${slotIndex}`}
-                                        className="bg-white border border-slate-200 px-1.5 py-0.5 rounded shadow-sm text-[10px]"
-                                      >
-                                        {format(slot.start, "HH:mm")}-
-                                        {format(slot.end, "HH:mm")}
-                                      </span>
-                                    ))
-                                  ) : (
-                                    <span className="text-[10px] text-slate-400">
-                                      無符合篩選的空檔
+                                ))
+                              ) : (
+                                <span className="text-[10px] text-slate-400">
+                                  無符合篩選的空檔
+                                </span>
+                              )}
+                            </div>
+                            {match.hidden.length > 0 && (
+                              <details className="text-[10px] text-slate-500">
+                                <summary className="cursor-pointer select-none text-slate-400 hover:text-slate-600">
+                                  展開其他剩餘空檔 ({match.hidden.length})
+                                </summary>
+                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                  {match.hidden.map((slot, slotIndex) => (
+                                    <span
+                                      key={`hidden-${slotIndex}`}
+                                      className="bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[10px]"
+                                    >
+                                      {format(slot.start, "HH:mm")}-
+                                      {format(slot.end, "HH:mm")}
                                     </span>
-                                  )}
+                                  ))}
                                 </div>
-                                {entry.hidden.length > 0 && (
-                                  <details className="text-[10px] text-slate-500">
-                                    <summary className="cursor-pointer select-none text-slate-400 hover:text-slate-600">
-                                      展開其他剩餘空檔 ({entry.hidden.length})
-                                    </summary>
-                                    <div className="flex flex-wrap gap-1 mt-1.5">
-                                      {entry.hidden.map((slot, slotIndex) => (
-                                        <span
-                                          key={`${entry.orgId}-hidden-${slotIndex}`}
-                                          className="bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[10px]"
-                                        >
-                                          {format(slot.start, "HH:mm")}-
-                                          {format(slot.end, "HH:mm")}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </details>
-                                )}
-                              </div>
-                            ))}
+                              </details>
+                            )}
                           </div>
                         </Card>
                       ))}
@@ -3632,10 +3665,12 @@ function App() {
                         <Card
                           key={idx}
                           className={cn(
-                            "p-4 flex items-center justify-between border-l-4",
-                            item.dayType === "例"
-                              ? "border-l-slate-300"
-                              : "border-l-sky-300",
+                            "p-4 flex items-center justify-between",
+                            item.dayType === "例/休"
+                              ? "border-violet-200 bg-violet-50/30"
+                              : item.dayType === "例"
+                                ? "border-slate-200"
+                                : "border-sky-200",
                           )}
                         >
                           <span className="font-bold text-slate-500 text-sm flex items-center gap-1">
@@ -3645,12 +3680,18 @@ function App() {
                           <span
                             className={cn(
                               "px-2.5 py-0.5 rounded-full text-xs font-bold",
-                              item.dayType === "例"
-                                ? "bg-slate-100 text-slate-400"
-                                : "bg-sky-50 text-sky-400",
+                              item.dayType === "例/休"
+                                ? "bg-violet-100 text-violet-500"
+                                : item.dayType === "例"
+                                  ? "bg-slate-100 text-slate-400"
+                                  : "bg-sky-50 text-sky-400",
                             )}
                           >
-                            {item.dayType === "例" ? "例假" : "休假"}
+                            {item.dayType === "例/休"
+                              ? "例假／休假"
+                              : item.dayType === "例"
+                                ? "例假"
+                                : "休假"}
                           </span>
                         </Card>
                       ))}
@@ -3744,13 +3785,14 @@ function App() {
               orgs={orgs}
               cardComponent={Card}
               orgDotComponent={OrgDot}
+              staffOrgLabelsComponent={StaffOrgLabels}
               cn={cn}
             />
           )
         ) : (
           /* Scenario B: Visualization Timeline */
           <div className="space-y-4">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-col gap-3 mb-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-slate-800">
                   全體人員日行程表 (06:00 - 22:00)
@@ -3764,11 +3806,18 @@ function App() {
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
-                <div className="flex items-center gap-1">
-                  <span className="w-3 h-3 bg-brand-coral rounded-sm shadow-sm"></span>{" "}
-                  服務中 (忙碌)
-                </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-medium text-slate-600">
+                {orgs.map((org, index) => (
+                  <div key={org.id} className="flex items-center gap-1.5">
+                    <span
+                      className={cn(
+                        "w-3 h-3 rounded-sm shadow-sm",
+                        getOrgColor(index).dot,
+                      )}
+                    />
+                    {org.name}
+                  </div>
+                ))}
                 <div className="flex items-center gap-1">
                   <span className="w-3 h-3 bg-brand-coral/10 border border-brand-coral/20 rounded-sm"></span>{" "}
                   緩衝時間
@@ -3780,90 +3829,97 @@ function App() {
               </div>
             </div>
 
-            <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-              {/* Header Row */}
-              <div className="grid grid-cols-[150px_1fr] border-b bg-slate-50 divide-x">
-                <div className="p-3 text-sm font-semibold text-slate-700 pl-6">
+            <div className="bg-white rounded-xl shadow-sm border overflow-x-auto">
+              <div className="min-w-[920px]">
+                {/* Header Row */}
+                <div className="grid grid-cols-[190px_1fr] border-b bg-slate-50 divide-x">
+                  <div className="sticky left-0 z-20 p-3 text-sm font-semibold text-slate-700 pl-6 bg-slate-50">
                   姓名
-                </div>
-                <div className="relative h-10">
-                  {/* Time Makers */}
-                  {Array.from({ length: END_OF_DAY - START_OF_DAY + 1 }).map(
-                    (_, i) => {
-                      const hour = START_OF_DAY + i;
-                      return (
-                        <div
-                          key={hour}
-                          className="absolute top-0 bottom-0 border-l border-slate-200 text-[10px] text-slate-400 pl-1 pt-2"
-                          style={{
-                            left: `${(i / (END_OF_DAY - START_OF_DAY)) * 100}%`,
-                          }}
-                        >
-                          {hour}:00
-                        </div>
-                      );
-                    },
-                  )}
-                </div>
-              </div>
-
-              {/* Staff Rows */}
-              <div className="divide-y max-h-[70vh] overflow-y-auto">
-                {processedAvailability.map((item, idx) => (
-                  <div
-                    key={idx}
-                    className="grid grid-cols-[150px_1fr] divide-x hover:bg-slate-50 transition-colors group"
-                  >
-                    <div className="p-3 pl-6 flex flex-col justify-center">
-                      <span className="font-medium text-sm text-slate-900 flex items-center gap-1">
-                        <OrgDot staff={item.staff} orgs={orgs} />
-                        {item.staff.name}
-                      </span>
-                      {item.isOff && (
-                        <span
-                          className={cn(
-                            "text-[10px] font-bold mt-0.5",
-                            item.dayType === "例"
-                              ? "text-slate-400"
-                              : "text-sky-400",
-                          )}
-                        >
-                          {item.dayType === "例" ? "例假" : "休假"}
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      className={cn(
-                        "relative h-14",
-                        item.isOff ? "bg-slate-100" : "bg-slate-100/50",
-                      )}
-                    >
-                      {item.isOff && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <span
-                            className={cn(
-                              "text-sm font-bold tracking-widest",
-                              item.dayType === "例"
-                                ? "text-slate-300"
-                                : "text-sky-300",
-                            )}
-                          >
-                            {item.dayType === "例" ? "例假日" : "休假日"}
-                          </span>
-                        </div>
-                      )}
-                      {item.busyRaw && item.busyRaw.length > 0 && (
-                        <TimelineBar
-                          startTime={START_OF_DAY}
-                          endTime={END_OF_DAY}
-                          blocked={item.blocked}
-                          rawBusy={item.busyRaw}
-                          date={selectedDate}
-                        />
-                      )}
-                    </div>
                   </div>
-                ))}
+                  <div className="relative h-10">
+                    {/* Time Makers */}
+                    {Array.from({ length: END_OF_DAY - START_OF_DAY + 1 }).map(
+                      (_, i) => {
+                        const hour = START_OF_DAY + i;
+                        return (
+                          <div
+                            key={hour}
+                            className="absolute top-0 bottom-0 border-l border-slate-200 text-[10px] text-slate-400 pl-1 pt-2"
+                            style={{
+                              left: `${(i / (END_OF_DAY - START_OF_DAY)) * 100}%`,
+                            }}
+                          >
+                            {hour}:00
+                          </div>
+                        );
+                      },
+                    )}
+                  </div>
+                </div>
+
+                {/* Staff Rows */}
+                <div className="divide-y max-h-[70vh] overflow-y-auto">
+                {processedAvailability.map((item) => {
+                  const laneCount = assignIntervalLanes(item.busyRaw || []).laneCount;
+                  const rowHeight = Math.max(60, 28 + laneCount * 28);
+                  const isMixedOff = item.dayType === "例/休";
+                  const offLabel = isMixedOff
+                    ? "例假／休假"
+                    : item.dayType === "例"
+                      ? "例假"
+                      : "休假";
+
+                  return (
+                    <div
+                      key={item.staff.staffKey || item.staff.id || item.staff.name}
+                      className="grid grid-cols-[190px_1fr] divide-x hover:bg-slate-50 transition-colors group"
+                    >
+                      <div
+                        className="sticky left-0 z-20 relative p-3 pl-6 flex items-center bg-white group-hover:bg-slate-50 transition-colors"
+                        style={{ minHeight: `${rowHeight}px` }}
+                      >
+                        <span className="font-medium text-sm text-slate-900 flex items-center gap-1">
+                          <OrgDot staff={item.staff} orgs={orgs} />
+                          <span className="truncate">{item.staff.name}</span>
+                        </span>
+                      </div>
+                      <div
+                        className={cn(
+                          "relative",
+                          item.isOff ? "bg-slate-100" : "bg-slate-100/50",
+                        )}
+                        style={{ height: `${rowHeight}px` }}
+                      >
+                        {item.isOff && (
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <span
+                              className={cn(
+                                "text-sm font-bold tracking-widest",
+                                isMixedOff
+                                  ? "text-violet-300"
+                                  : item.dayType === "例"
+                                    ? "text-slate-300"
+                                    : "text-sky-300",
+                              )}
+                            >
+                              {offLabel}
+                            </span>
+                          </div>
+                        )}
+                        {item.busyRaw && item.busyRaw.length > 0 && (
+                          <TimelineBar
+                            startTime={START_OF_DAY}
+                            endTime={END_OF_DAY}
+                            bufferedBusy={item.bufferedBusy}
+                            rawBusy={item.busyRaw}
+                            date={selectedDate}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                </div>
               </div>
             </div>
           </div>

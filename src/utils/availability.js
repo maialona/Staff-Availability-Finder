@@ -8,6 +8,36 @@ import {
 
 const getRecordStaffKey = (record) => record.__staffKey || record["服務人員"];
 
+const getStaffKey = (staff) => staff.staffKey || staff.id || staff.name;
+
+export const assignIntervalLanes = (intervals = []) => {
+  const laneEnds = [];
+  const assignments = new Map();
+
+  [...intervals]
+    .map((interval, originalIndex) => ({ interval, originalIndex }))
+    .sort((a, b) => {
+      const startDiff = a.interval.start - b.interval.start;
+      if (startDiff !== 0) return startDiff;
+      return a.interval.end - b.interval.end;
+    })
+    .forEach(({ interval, originalIndex }) => {
+      let lane = laneEnds.findIndex((laneEnd) => laneEnd <= interval.start);
+      if (lane === -1) lane = laneEnds.length;
+      laneEnds[lane] = interval.end;
+      assignments.set(originalIndex, lane);
+    });
+
+  return {
+    laneCount: Math.max(1, laneEnds.length),
+    intervals: intervals.map((interval, originalIndex) => ({
+      ...interval,
+      lane: assignments.get(originalIndex) ?? 0,
+      originalIndex,
+    })),
+  };
+};
+
 /**
  * Find staff with enough contiguous free time within a period (AM/PM).
  * Returns same shape as applyTimeFilter: { available, potential, offDuty }
@@ -204,9 +234,17 @@ export const calculateDailyAvailability = (
     });
 
     return staffData.map((staff) => {
-      const staffKey = staff.staffKey || staff.id || staff.name;
-      const staffRecords = recordsByStaffKey.get(staffKey) || [];
-      const offRecord = staffRecords.find(
+      const members = staff.members?.length ? staff.members : [staff];
+      const memberByStaffKey = new Map(
+        members.map((member) => [getStaffKey(member), member]),
+      );
+      const memberStaffKeys = staff.memberStaffKeys?.length
+        ? staff.memberStaffKeys
+        : [getStaffKey(staff)];
+      const staffRecords = memberStaffKeys.flatMap(
+        (staffKey) => recordsByStaffKey.get(staffKey) || [],
+      );
+      const offRecords = staffRecords.filter(
         (record) =>
           record["服務時間"] === "例" || record["服務時間"] === "休",
       );
@@ -237,19 +275,37 @@ export const calculateDailyAvailability = (
         const caseName = caseMatch ? caseMatch[1].trim() : "";
 
         if (isValid(startTime) && isValid(endTime)) {
-          busyIntervals.push({ start: startTime, end: endTime, caseName });
+          const sourceStaffKey = getRecordStaffKey(record);
+          const sourceStaff = memberByStaffKey.get(sourceStaffKey) || staff;
+          busyIntervals.push({
+            start: startTime,
+            end: endTime,
+            caseName,
+            orgId: sourceStaff.orgId || record.__orgId,
+            orgName: sourceStaff.org || "",
+            orgIdx: sourceStaff.orgIdx ?? 0,
+            originalStaffName: sourceStaff.name || record["服務人員"] || "",
+            sourceStaffKey,
+          });
         }
       });
 
-      const rawBlocked = busyIntervals.map((interval) => ({
+      const bufferedBusy = busyIntervals.map((interval) => ({
         start: subMinutes(interval.start, bufferBuffer),
         end: addMinutes(interval.end, bufferBuffer),
         type: "buffered_busy",
         originalStart: interval.start,
         originalEnd: interval.end,
+        orgId: interval.orgId,
+        orgName: interval.orgName,
+        orgIdx: interval.orgIdx,
+        originalStaffName: interval.originalStaffName,
+        sourceStaffKey: interval.sourceStaffKey,
       }));
 
-      rawBlocked.sort((a, b) => a.start - b.start);
+      const rawBlocked = bufferedBusy
+        .map((block) => ({ ...block }))
+        .sort((a, b) => a.start - b.start);
 
       const mergedBlocked = [];
       if (rawBlocked.length > 0) {
@@ -289,13 +345,30 @@ export const calculateDailyAvailability = (
         freeIntervals.push({ start: new Date(cursor), end: dayEndBoundary });
       }
 
+      const offDayTypes = [...new Set(offRecords.map((record) => record["服務時間"]))];
+      const isOff = busyIntervals.length === 0 && offDayTypes.length > 0;
+      const dayType = offDayTypes.length > 1 ? "例/休" : offDayTypes[0];
+      const offSources = offRecords.map((record) => {
+        const sourceStaffKey = getRecordStaffKey(record);
+        const sourceStaff = memberByStaffKey.get(sourceStaffKey) || staff;
+        return {
+          dayType: record["服務時間"],
+          orgId: sourceStaff.orgId || record.__orgId,
+          orgName: sourceStaff.org || "",
+          orgIdx: sourceStaff.orgIdx ?? 0,
+          originalStaffName: sourceStaff.name || record["服務人員"] || "",
+          sourceStaffKey,
+        };
+      });
+
       return {
         staff,
         busyRaw: busyIntervals,
+        bufferedBusy,
         blocked: mergedBlocked,
         free: freeIntervals,
         isFullyFree: busyIntervals.length === 0,
-        ...(offRecord ? { isOff: true, dayType: offRecord["服務時間"] } : {}),
+        ...(isOff ? { isOff: true, dayType, offSources } : {}),
       };
     });
   } catch (error) {
