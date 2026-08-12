@@ -26,6 +26,9 @@ import {
   Route,
   ChevronLeft,
   ChevronRight,
+  PanelRightOpen,
+  PanelRightClose,
+  SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
@@ -1149,6 +1152,20 @@ function App() {
   };
 
   const [viewMode, setViewMode] = useState("day"); // 'day' | 'week'
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(true);
+
+  useEffect(() => {
+    if (!isFilterPanelOpen || (viewMode !== "day" && viewMode !== "week")) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsFilterPanelOpen(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFilterPanelOpen, viewMode]);
   const [selectedDate, setSelectedDate] = useState(
     format(new Date(), "yyyy-MM-dd"),
   );
@@ -2899,10 +2916,71 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 max-w-7xl mx-auto w-full p-4 sm:px-6 lg:px-8 py-8">
         {/* Dashboard Controls */}
-        <div className="mb-8 bg-white rounded-3xl border border-slate-100 shadow-sm anim-fade-up anim-delay-1 overflow-hidden">
+        {(viewMode === "day" || viewMode === "week") && !isFilterPanelOpen && (
+          <button
+            type="button"
+            onClick={() => setIsFilterPanelOpen(true)}
+            className="fixed right-4 sm:right-6 top-24 z-30 inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-brand-slate shadow-lg shadow-slate-900/10 transition-all duration-200 hover:border-brand-orange/40 hover:text-brand-orange focus:outline-none focus:ring-2 focus:ring-brand-orange/30"
+            aria-label="展開篩選條件"
+            aria-expanded="false"
+            aria-controls="schedule-filter-panel"
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            <span>篩選條件</span>
+            <PanelRightOpen className="h-4 w-4 text-slate-400" />
+          </button>
+        )}
+
+        {(viewMode === "day" || viewMode === "week") && isFilterPanelOpen && (
+          <button
+            type="button"
+            className="fixed inset-x-0 bottom-0 top-20 z-40 bg-brand-slate/20 lg:hidden"
+            onClick={() => setIsFilterPanelOpen(false)}
+            aria-label="關閉篩選條件"
+          />
+        )}
+
+        {(viewMode === "day" || viewMode === "week") && (
+          <aside
+            id="schedule-filter-panel"
+            className={cn(
+              "fixed bottom-0 right-0 top-20 z-50 w-[min(420px,calc(100vw-20px))] border-l border-slate-200 bg-white shadow-2xl shadow-slate-900/15 transition-transform duration-200 ease-out",
+              isFilterPanelOpen
+                ? "translate-x-0"
+                : "pointer-events-none translate-x-full",
+            )}
+            aria-hidden={!isFilterPanelOpen}
+            inert={!isFilterPanelOpen}
+          >
+          <div className="flex h-full flex-col">
+          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl bg-brand-orange/10 p-2 text-brand-orange">
+                <SlidersHorizontal className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-brand-slate">篩選條件</h2>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {viewMode === "day" ? "單日概況" : "一週概況"}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsFilterPanelOpen(false)}
+              className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition-colors hover:bg-slate-50 hover:text-brand-slate focus:outline-none focus:ring-2 focus:ring-brand-orange/30"
+              aria-label="收合篩選條件"
+              aria-expanded="true"
+              aria-controls="schedule-filter-panel"
+            >
+              <PanelRightClose className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className="bg-white overflow-hidden">
           {/* Row 1: always-visible controls */}
-          <div className="p-6 flex flex-col md:flex-row md:items-start gap-6">
-            <div className="space-y-2 flex-1">
+          <div className="p-5 flex flex-col gap-5">
+            <div className="space-y-2">
               <Label className="text-brand-slate font-bold flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-brand-coral" />
                 選擇日期
@@ -2910,7 +2988,7 @@ function App() {
               <DatePicker value={selectedDate} onChange={setSelectedDate} />
             </div>
 
-            <div className="space-y-2 flex-1">
+            <div className="space-y-2">
               <Label className="text-brand-slate font-bold flex items-center gap-2">
                 <Clock className="w-4 h-4 text-brand-teal" />
                 服務緩衝時間 (分鐘)
@@ -2923,19 +3001,17 @@ function App() {
               />
             </div>
 
-            <div className="hidden md:block h-10 w-px bg-slate-100 self-start mt-8" />
-
             {/* Filter Mode Toggle */}
             <div className="space-y-2">
               <Label className="text-brand-slate font-bold flex items-center gap-2">
                 <Search className="w-4 h-4 text-brand-orange" />
                 篩選模式
               </Label>
-              <div className="flex rounded-xl overflow-hidden border border-slate-200">
+              <div className="grid grid-cols-2 rounded-xl overflow-hidden border border-slate-200">
                 <button
                   onClick={() => switchFilterMode("manual")}
                   className={cn(
-                    "px-4 py-2 text-xs font-bold transition-all",
+                    "px-4 py-2.5 text-xs font-bold transition-all",
                     filterMode === "manual"
                       ? "bg-brand-orange text-white"
                       : "bg-white text-slate-500 hover:bg-slate-50",
@@ -2946,7 +3022,7 @@ function App() {
                 <button
                   onClick={() => switchFilterMode("service")}
                   className={cn(
-                    "px-4 py-2 text-xs font-bold transition-all",
+                    "px-4 py-2.5 text-xs font-bold transition-all",
                     filterMode === "service"
                       ? "bg-brand-orange text-white"
                       : "bg-white text-slate-500 hover:bg-slate-50",
@@ -2957,10 +3033,8 @@ function App() {
               </div>
             </div>
 
-            <div className="hidden md:block h-10 w-px bg-slate-100 self-start mt-8" />
-
             {/* Summary panel */}
-            <div className="flex-none space-y-3">
+            <div className="flex-none space-y-4 border-t border-slate-100 pt-5">
               <div>
                 {filterMode === "manual" &&
                   (filterStartTime || filterEndTime) && (
@@ -3034,8 +3108,8 @@ function App() {
 
           {/* Row 2: filter controls (conditional) */}
           {filterMode === "manual" && (
-            <div className="px-6 pb-6 pt-5 border-t border-slate-100 flex flex-col md:flex-row md:items-end gap-6">
-              <div className="space-y-2 flex-1">
+            <div className="px-5 pb-5 pt-5 border-t border-slate-100 flex flex-col gap-5">
+              <div className="space-y-2">
                 <Label className="text-brand-orange font-bold flex items-center gap-2">
                   <Users className="w-4 h-4" />
                   時段篩選 (開始)
@@ -3046,7 +3120,7 @@ function App() {
                   placeholder="開始時間"
                 />
               </div>
-              <div className="space-y-2 flex-1">
+              <div className="space-y-2">
                 <Label className="text-brand-orange font-bold flex items-center gap-2">
                   <Users className="w-4 h-4" />
                   時段篩選 (結束)
@@ -3061,7 +3135,7 @@ function App() {
           )}
 
           {filterMode === "service" && (
-            <div className="px-6 pb-6 pt-5 border-t border-slate-100 flex flex-col md:flex-row md:items-end gap-6 bg-slate-50/40">
+            <div className="px-5 pb-5 pt-5 border-t border-slate-100 flex flex-col gap-5 bg-slate-50/40">
               <div className="w-full space-y-5">
                 {viewMode === "week" && (
                   <div className="flex items-center gap-2 rounded-2xl bg-white p-1 border border-slate-200 w-fit">
@@ -3136,7 +3210,7 @@ function App() {
                                     toggleAdvancedWeekRuleDay(rule.id, option.value)
                                   }
                                   className={cn(
-                                    "min-w-[72px] px-5 py-3 rounded-2xl text-base font-semibold border shadow-sm transition-all",
+                                    "min-w-10 px-3 py-2 rounded-xl text-sm font-semibold border shadow-sm transition-all",
                                     isActive
                                       ? "bg-brand-orange text-white border-brand-orange shadow-brand-orange/15"
                                       : "bg-white text-slate-500 border-slate-200 hover:border-brand-orange/40 hover:bg-brand-lavender/20",
@@ -3149,7 +3223,7 @@ function App() {
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-1 gap-4">
                           <div className="space-y-2">
                             <Label className="text-brand-orange font-bold flex items-center gap-2">
                               <List className="w-4 h-4" />
@@ -3230,8 +3304,8 @@ function App() {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex flex-col md:flex-row md:items-end gap-6">
-                    <div className="space-y-2 flex-1 min-w-[180px]">
+                  <div className="flex flex-col gap-5">
+                    <div className="space-y-2">
                       <Label className="text-brand-orange font-bold flex items-center gap-2">
                         <List className="w-4 h-4" />
                         空檔分鐘數
@@ -3252,7 +3326,7 @@ function App() {
                       />
                     </div>
 
-                    <div className="space-y-2 flex-1">
+                    <div className="space-y-2">
                       <Label className="text-brand-orange font-bold flex items-center gap-2">
                         <Clock className="w-4 h-4" />
                         時段 (開始)
@@ -3263,7 +3337,7 @@ function App() {
                         placeholder="開始時間"
                       />
                     </div>
-                    <div className="space-y-2 flex-1">
+                    <div className="space-y-2">
                       <Label className="text-brand-orange font-bold flex items-center gap-2">
                         <Clock className="w-4 h-4" />
                         時段 (結束)
@@ -3275,7 +3349,7 @@ function App() {
                       />
                     </div>
                     {viewMode === "week" && (
-                      <div className="space-y-2 flex-1 min-w-[180px]">
+                      <div className="space-y-2">
                         <Label className="text-brand-orange font-bold flex items-center gap-2">
                           <Calendar className="w-4 h-4" />
                           至少符合幾天
@@ -3306,6 +3380,10 @@ function App() {
             </div>
           )}
         </div>
+          </div>
+        </div>
+        </aside>
+        )}
 
         {/* Scenario A: Filter Applied */}
         {activeFilterResult && viewMode === "day" ? (
