@@ -193,7 +193,8 @@ export const StatsView = ({
       </div>
 
       <Card className="border-none shadow-[0_8px_30px_rgba(0,0,0,0.04)] overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-end gap-3">
+        <div className="overflow-x-auto border-b border-slate-100">
+          <div className="flex w-max min-w-full items-center justify-end gap-3 p-4">
             <div className="flex items-center gap-3 text-[11px] font-medium text-slate-500 border-r border-slate-200 pr-3">
               <span className="flex items-center gap-1">
                 <span className="w-3 h-3 rounded-sm bg-brand-coral inline-block"></span>
@@ -310,6 +311,7 @@ export const StatsView = ({
                 列表
               </button>
             </div>
+          </div>
         </div>
 
         {viewMode === "chart" ? (
