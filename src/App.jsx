@@ -57,6 +57,7 @@ import {
 import {
   buildAvailabilityStaffGroups,
 } from "./utils/staff-grouping";
+import { mergeStaffHoursStatsRows } from "./utils/staff-hours";
 import { ORG_COLORS, getOrgColor } from "./utils/org-colors";
 import {
   loadXLSX,
@@ -2274,7 +2275,7 @@ function App() {
   ]);
 
   // Stats: service hours per staff (with 例/休 day breakdown)
-  const statsData = useMemo(() => {
+  const unmergedStatsData = useMemo(() => {
     if (!activeScheduleData.length || !activeStaffData.length) return [];
 
     const getRecordStaffKey = (record) =>
@@ -2484,6 +2485,11 @@ function App() {
       })
       .sort((a, b) => b.totalMinutes - a.totalMinutes);
   }, [activeScheduleData, activeStaffData]);
+
+  const statsData = useMemo(
+    () => mergeStaffHoursStatsRows(unmergedStatsData, activeStaffData),
+    [unmergedStatsData, activeStaffData],
+  );
 
   // --- Render Components ---
 
