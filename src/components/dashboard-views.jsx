@@ -193,7 +193,7 @@ export const StatsView = ({
       </div>
 
       <Card className="border-none shadow-[0_8px_30px_rgba(0,0,0,0.04)] overflow-hidden">
-        <div className="flex flex-wrap items-center justify-end gap-3 border-b border-slate-100 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
             <div className="flex items-center gap-3 text-[11px] font-medium text-slate-500 border-r border-slate-200 pr-3">
               <span className="flex items-center gap-1">
                 <span className="w-3 h-3 rounded-sm bg-brand-coral inline-block"></span>
