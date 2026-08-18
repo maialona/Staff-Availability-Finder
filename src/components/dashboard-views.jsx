@@ -130,7 +130,12 @@ export const StatsView = ({
   const scheduledCount = statsData.filter((staffStat) => staffStat.sessions > 0).length;
   const avgHours =
     scheduledCount > 0 ? +(totalHours / scheduledCount).toFixed(1) : 0;
-  const maxMinutes = sorted[0]?.totalMinutes || 1;
+  const maxChartMinutes = Math.max(
+    1,
+    ...sorted.map(
+      (item) => item.totalMinutes + (item.transitHoursTotal || 0) * 60,
+    ),
+  );
   const statsGridRows = buildStatsGridRows(sorted);
 
   const handleGridCopy = () => {
@@ -205,6 +210,10 @@ export const StatsView = ({
               <span className="flex items-center gap-1">
                 <span className="w-3 h-3 rounded-sm bg-amber-400 inline-block"></span>
                 例假日出勤
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-3 rounded-sm bg-teal-400 inline-block"></span>
+                轉場
               </span>
             </div>
             <div className="flex items-center gap-2 border-r border-slate-200 pr-3">
@@ -306,15 +315,27 @@ export const StatsView = ({
         {viewMode === "chart" ? (
           <div className="divide-y divide-slate-50 max-h-[60vh] overflow-y-auto">
             {sorted.map((item, index) => {
-              const normalPct = mounted ? (item.normalMinutes / maxMinutes) * 100 : 0;
-              const otPct = mounted ? (item.overtimeMinutes / maxMinutes) * 100 : 0;
-              const restPct = mounted ? (item.restDayMinutes / maxMinutes) * 100 : 0;
-              const holPct = mounted ? (item.holidayMinutes / maxMinutes) * 100 : 0;
+              const normalPct = mounted
+                ? (item.normalMinutes / maxChartMinutes) * 100
+                : 0;
+              const otPct = mounted
+                ? (item.overtimeMinutes / maxChartMinutes) * 100
+                : 0;
+              const restPct = mounted
+                ? (item.restDayMinutes / maxChartMinutes) * 100
+                : 0;
+              const holPct = mounted
+                ? (item.holidayMinutes / maxChartMinutes) * 100
+                : 0;
+              const transitPct = mounted
+                ? (((item.transitHoursTotal || 0) * 60) / maxChartMinutes) * 100
+                : 0;
               const delay = `${Math.min(index * 40, 600)}ms`;
               const hasExtra =
                 item.overtimeMinutes > 0 ||
                 item.restDayMinutes > 0 ||
-                item.holidayMinutes > 0;
+                item.holidayMinutes > 0 ||
+                item.transitHoursTotal > 0;
 
               return (
                 <div
@@ -371,6 +392,11 @@ export const StatsView = ({
                         {item.holidayMinutes > 0 && (
                           <span className="text-amber-500">例{item.holidayHours}h</span>
                         )}
+                        {item.transitHoursTotal > 0 && (
+                          <span className="text-teal-600">
+                            轉{item.transitHoursTotal}h
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -402,6 +428,13 @@ export const StatsView = ({
                         className="h-full bg-amber-400 transition-all duration-700 ease-out"
                         style={{ width: `${holPct}%`, transitionDelay: delay }}
                         title={`例假日出勤 ${item.holidayHours}h`}
+                      />
+                    )}
+                    {item.transitHoursTotal > 0 && (
+                      <div
+                        className="h-full bg-teal-400 transition-all duration-700 ease-out"
+                        style={{ width: `${transitPct}%`, transitionDelay: delay }}
+                        title={`轉場 ${item.transitHoursTotal}h`}
                       />
                     )}
                   </div>
