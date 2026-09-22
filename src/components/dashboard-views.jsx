@@ -102,6 +102,7 @@ export const StatsView = ({
 
   const filteredStats = statsData.filter((item) => {
     if (hourFilter === "gt220") return item.totalHours > 220;
+    if (hourFilter === "lt130") return item.totalHours < 130;
     if (hourFilter === "lt100") return item.totalHours < 100;
     return true;
   });
@@ -258,6 +259,13 @@ export const StatsView = ({
               <HourFilterBtn
                 value="gt220"
                 label=">220h"
+                hourFilter={hourFilter}
+                setHourFilter={setHourFilter}
+                cn={cn}
+              />
+              <HourFilterBtn
+                value="lt130"
+                label="<130h"
                 hourFilter={hourFilter}
                 setHourFilter={setHourFilter}
                 cn={cn}
